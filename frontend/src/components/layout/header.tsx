@@ -1,0 +1,163 @@
+"use client";
+
+import { usePathname } from "next/navigation";
+import { motion } from "framer-motion";
+import { Search, Bell, PanelRight, Command } from "lucide-react";
+import { useThemeStore } from "@/stores/theme-store";
+import { useAuthStore } from "@/stores/auth-store";
+import { cn } from "@/lib/utils";
+import { useEffect, useState } from "react";
+
+const ROUTE_TITLES: Record<string, string> = {
+  "/dashboard": "Chat",
+  "/dashboard/knowledge": "Knowledge Bases",
+  "/dashboard/documents": "Documents",
+  "/dashboard/pipelines": "Pipelines",
+  "/dashboard/playground": "Model Arena",
+  "/dashboard/prompts": "Prompt Lab",
+  "/dashboard/agents": "Agents",
+  "/dashboard/analytics": "Analytics",
+  "/dashboard/evaluation": "Evaluation",
+  "/dashboard/experiments": "Experiments",
+  "/dashboard/settings": "Settings",
+};
+
+export function Header() {
+  const pathname = usePathname();
+  const { setCommandPaletteOpen, rightPanelOpen, toggleRightPanel } = useThemeStore();
+  const { user } = useAuthStore();
+
+  const title = ROUTE_TITLES[pathname] || "RAGLense";
+
+  // Typewriter placeholder animation
+  const [placeholder, setPlaceholder] = useState("Search anything...");
+  useEffect(() => {
+    const texts = ["Search documents...", "Go to Pipelines...", "Find Knowledge bases...", "Search chat logs..."];
+    let textIdx = 0;
+    let charIdx = 0;
+    let isDeleting = false;
+    let timeout: NodeJS.Timeout;
+
+    const type = () => {
+      const current = texts[textIdx];
+      if (isDeleting) {
+        setPlaceholder(current.slice(0, charIdx - 1));
+        charIdx--;
+      } else {
+        setPlaceholder(current.slice(0, charIdx + 1));
+        charIdx++;
+      }
+
+      let speed = isDeleting ? 30 : 60;
+      if (!isDeleting && charIdx === current.length) {
+        speed = 2000; // wait at end
+        isDeleting = true;
+      } else if (isDeleting && charIdx === 0) {
+        isDeleting = false;
+        textIdx = (textIdx + 1) % texts.length;
+        speed = 200; // wait before next word
+      }
+
+      timeout = setTimeout(type, speed);
+    };
+
+    timeout = setTimeout(type, 500);
+    return () => clearTimeout(timeout);
+  }, []);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setCommandPaletteOpen(true);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [setCommandPaletteOpen]);
+
+  return (
+    <header className="h-[var(--header-height)] border-b border-[var(--color-border)] bg-[var(--color-surface-50)]/60 backdrop-blur-2xl flex items-center justify-between px-6 sticky top-0 z-30">
+      {/* Left: Title */}
+      <div className="flex items-center gap-4">
+        <h1 className="text-base font-bold text-[var(--color-text-primary)] font-display">
+          {title}
+        </h1>
+      </div>
+
+      {/* Center: Search with typewriter & expand focus */}
+      <motion.button
+        onClick={() => setCommandPaletteOpen(true)}
+        whileHover={{ scale: 1.01, boxShadow: "0 0 16px rgba(124, 58, 237, 0.12)" }}
+        className="hidden sm:flex items-center gap-3 px-4 py-2 rounded-xl bg-[var(--color-surface-200)]/70 border border-[var(--color-border)] hover:border-[var(--color-brand-500)]/30 transition-all cursor-pointer group max-w-xs hover:max-w-md w-full mx-8"
+      >
+        <Search className="w-4 h-4 text-[var(--color-text-muted)] group-hover:text-[var(--color-brand-400)] transition-colors" />
+        <span className="text-xs text-[var(--color-text-muted)] flex-1 text-left font-display">
+          {placeholder}
+        </span>
+        <kbd className="hidden md:flex items-center gap-0.5 px-2 py-0.5 rounded-md bg-[var(--color-surface-300)] text-[10px] font-medium text-[var(--color-text-muted)] border border-[var(--color-border)]">
+          <Command className="w-3 h-3" />K
+        </kbd>
+      </motion.button>
+
+      {/* Right: Actions */}
+      <div className="flex items-center gap-2">
+        {/* Notifications */}
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          className="w-9 h-9 rounded-xl flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-200)] transition-all relative"
+        >
+          <motion.div
+            animate={{ rotate: [0, -12, 12, -12, 12, 0] }}
+            transition={{ repeat: Infinity, duration: 1.5, repeatDelay: 3 }}
+          >
+            <Bell className="w-[18px] h-[18px]" />
+          </motion.div>
+          <motion.span
+            className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[var(--color-brand-500)]"
+            animate={{ scale: [1, 1.25, 1] }}
+            transition={{ duration: 2, repeat: Infinity }}
+            style={{ boxShadow: "0 0 6px rgba(124, 58, 237, 0.5)" }}
+          />
+        </motion.button>
+
+        {/* Right Panel Toggle */}
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={toggleRightPanel}
+          className={cn(
+            "w-9 h-9 rounded-xl flex items-center justify-center transition-all",
+            rightPanelOpen
+              ? "text-[var(--color-brand-400)] bg-[var(--color-brand-500)]/10 glow-brand"
+              : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-200)]"
+          )}
+        >
+          <PanelRight className="w-[18px] h-[18px]" />
+        </motion.button>
+
+        {/* User Avatar */}
+        <motion.button
+          whileHover={{ scale: 1.08 }}
+          whileTap={{ scale: 0.95 }}
+          className="relative ml-1"
+        >
+          {/* Animated gradient ring */}
+          <div 
+            className="absolute -inset-0.5 rounded-xl bg-gradient-to-r from-[var(--color-brand-500)] via-[var(--color-accent-400)] to-[var(--color-rose-400)] opacity-70 animate-breathe" 
+            style={{ 
+              animation: "breathe 3s ease-in-out infinite, spin-slow 12s linear infinite",
+              boxShadow: "0 0 10px rgba(124, 58, 237, 0.25)"
+            }} 
+          />
+          <div className="relative w-9 h-9 rounded-xl bg-gradient-to-br from-[var(--color-brand-600)] to-[var(--color-accent-500)] flex items-center justify-center text-white text-sm font-bold font-display shadow-md">
+            {user?.full_name?.charAt(0)?.toUpperCase() || "U"}
+          </div>
+        </motion.button>
+      </div>
+    </header>
+  );
+}
