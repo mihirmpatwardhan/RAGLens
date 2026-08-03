@@ -5,9 +5,10 @@ Core data models for knowledge bases, documents, chunks, and pipeline runs.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     DateTime,
     Float,
@@ -15,8 +16,8 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Uuid,
 )
-from sqlalchemy import JSON, Uuid as UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.db.base import Base
@@ -28,12 +29,12 @@ class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid, primary_key=True, default=uuid.uuid4
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+        Uuid, ForeignKey("users.id"), nullable=False
     )
     icon: Mapped[str] = mapped_column(String(10), default="📚", nullable=False)
     color: Mapped[str] = mapped_column(String(7), default="#6366f1", nullable=False)
@@ -47,15 +48,23 @@ class KnowledgeBase(Base):
     total_tokens: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     storage_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
 
+    # Embedding metadata — set once on first ingestion, enforced by dimension_guard.
+    # Prevents mixing 1536-dim OpenAI vectors with 384-dim local BGE vectors in the
+    # same collection, which would crash similarity search with a dimension error.
+    embedding_model: Mapped[str] = mapped_column(
+        String(255), default="", nullable=False
+    )
+    vector_dimension: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
 
@@ -73,12 +82,8 @@ class Document(Base):
 
     __tablename__ = "documents"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("knowledge_bases.id"), nullable=False
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(512), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -106,16 +111,21 @@ class Document(Base):
     table_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Content type distinguishes modality: text | table | image | code | audio | video
+    content_type: Mapped[str] = mapped_column(String(20), default="text", nullable=False)
+    # Source date = when the content was originally created/recorded (distinct from upload date).
+    # Users can manually correct this if auto-detection fails.
+    source_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
 
@@ -138,10 +148,10 @@ class Chunk(Base):
     __tablename__ = "chunks"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid, primary_key=True, default=uuid.uuid4
     )
     document_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False
+        Uuid, ForeignKey("documents.id"), nullable=False
     )
 
     # Content
@@ -160,6 +170,9 @@ class Chunk(Base):
     embedding_dimension: Mapped[int | None] = mapped_column(Integer, nullable=True)
     vector_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Content type — inherits from parent document element type
+    content_type: Mapped[str] = mapped_column(String(20), default="text", nullable=False)
+
     # Stats
     token_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -172,12 +185,12 @@ class Chunk(Base):
 
     # Relationships (parent/child for hierarchical chunking)
     parent_chunk_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("chunks.id"), nullable=True
+        Uuid, ForeignKey("chunks.id"), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         nullable=False,
     )
 
@@ -194,10 +207,10 @@ class PipelineRun(Base):
     __tablename__ = "pipeline_runs"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid, primary_key=True, default=uuid.uuid4
     )
     document_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False
+        Uuid, ForeignKey("documents.id"), nullable=False
     )
 
     status: Mapped[str] = mapped_column(
@@ -227,7 +240,7 @@ class PipelineRun(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         nullable=False,
     )
 
@@ -243,15 +256,11 @@ class Conversation(Base):
 
     __tablename__ = "conversations"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     title: Mapped[str] = mapped_column(String(255), default="New Conversation", nullable=False)
     knowledge_base_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("knowledge_bases.id"), nullable=True
+        Uuid, ForeignKey("knowledge_bases.id"), nullable=True
     )
 
     # Settings
@@ -269,13 +278,13 @@ class Conversation(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
 
@@ -293,12 +302,8 @@ class Message(Base):
 
     __tablename__ = "messages"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    conversation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=False
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
 
     role: Mapped[str] = mapped_column(
         String(20), nullable=False
@@ -323,7 +328,7 @@ class Message(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         nullable=False,
     )
 
@@ -332,3 +337,52 @@ class Message(Base):
 
     def __repr__(self) -> str:
         return f"<Message {self.role} ({self.id})>"
+
+
+class PromptTemplate(Base):
+    """A reusable, named prompt template owned by a user.
+
+    Variables use ``{{variable_name}}`` Jinja-style placeholders.
+    The ``variables`` JSON column stores the list of variable names for the UI
+    to render a fill-in form before submitting to /playground/run.
+    """
+
+    __tablename__ = "prompt_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Optional scoping to a specific KB (None = global / cross-KB)
+    knowledge_base_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("knowledge_bases.id", ondelete="SET NULL"), nullable=True
+    )
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The raw prompt text — may contain {{variable}} placeholders
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Ordered list of variable names extracted from the content
+    variables: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+
+    # When True, other users in the same workspace can read (but not modify) this template
+    is_public: Mapped[bool] = mapped_column(default=False, nullable=False)
+
+    # Default LLM settings for this template
+    default_model: Mapped[str] = mapped_column(String(100), default="gpt-4o", nullable=False)
+    default_temperature: Mapped[float] = mapped_column(Float, default=0.1, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<PromptTemplate {self.name!r}>"

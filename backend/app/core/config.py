@@ -7,6 +7,7 @@ All values sourced from environment variables with sensible defaults.
 
 import logging
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import model_validator
@@ -15,13 +16,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 logger = logging.getLogger(__name__)
 
 _INSECURE_DEFAULT_SECRET = "CHANGE-THIS-IN-PRODUCTION-USE-A-STRONG-SECRET-KEY"
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -86,11 +88,26 @@ class Settings(BaseSettings):
     MISTRAL_API_KEY: str = ""
     GROQ_API_KEY: str = ""
     OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OPENROUTER_API_KEY_1: str = ""
+    OPENROUTER_API_KEY_2: str = ""
 
     DEFAULT_LLM_PROVIDER: str = "openai"
     DEFAULT_LLM_MODEL: str = "gpt-4o"
     DEFAULT_TEMPERATURE: float = 0.1
     DEFAULT_MAX_TOKENS: int = 4096
+    # Ordered list of providers tried in sequence when the primary fails.
+    # Values must match keys understood by LiteLLM (openai, anthropic, google, deepseek).
+    LLM_FALLBACK_CHAIN: list[str] = ["openai", "anthropic", "google"]
+    # Max attempts per provider before moving to the next in the fallback chain.
+    LLM_MAX_RETRIES: int = 2
+    # Initial delay (seconds) for exponential backoff between retries.
+    LLM_RETRY_DELAY: float = 1.0
+
+    # File upload limits
+    MAX_UPLOAD_SIZE_MB: int = 500  # default 500 MB
+    @property
+    def MAX_UPLOAD_SIZE_BYTES(self) -> int:
+        return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
     # ──────────────────────────────────────────────
     # Embedding Models
@@ -98,19 +115,32 @@ class Settings(BaseSettings):
     DEFAULT_EMBEDDING_PROVIDER: str = "openai"
     DEFAULT_EMBEDDING_MODEL: str = "text-embedding-3-small"
     DEFAULT_EMBEDDING_DIMENSION: int = 1536
+    # Set to True to automatically fall back to a local HuggingFace model when
+    # the OpenAI embedding API fails or rate-limits.
+    EMBEDDING_FALLBACK_TO_LOCAL: bool = True
+    # HuggingFace model used when OpenAI embedding is unavailable.
+    # bge-small-en-v1.5 is 33MB — already available via sentence-transformers.
+    LOCAL_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
+    LOCAL_EMBEDDING_DIMENSION: int = 384
 
     # ──────────────────────────────────────────────
     # Vector Database
     # ──────────────────────────────────────────────
     VECTOR_DB_PROVIDER: Literal["chroma", "faiss", "pinecone", "qdrant", "weaviate", "milvus"] = (
-        "chroma"
+        "qdrant"
     )
+    # ChromaDB — kept for migration script and fallback use
     CHROMA_PERSIST_DIR: str = "./chroma_data"
     CHROMA_COLLECTION_NAME: str = "raglense_default"
+    # Pinecone
     PINECONE_API_KEY: str = ""
     PINECONE_INDEX_NAME: str = ""
+    # Qdrant — primary vector store (Phase 3)
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: str = ""
+    # gRPC port for high-throughput batch upserts (optional; falls back to HTTP)
+    QDRANT_GRPC_PORT: int = 6334
+    QDRANT_PREFER_GRPC: bool = False
 
     # ──────────────────────────────────────────────
     # Chunking
@@ -118,6 +148,10 @@ class Settings(BaseSettings):
     DEFAULT_CHUNK_SIZE: int = 512
     DEFAULT_CHUNK_OVERLAP: int = 50
     DEFAULT_CHUNKING_STRATEGY: str = "recursive"
+    # Set to True to use unstructured library for layout-aware PDF parsing.
+    # Enables parent-child hierarchical chunking for tables, headers, and images.
+    # Falls back gracefully to flat pymupdf extraction if unstructured is not installed.
+    ENABLE_LAYOUT_PARSER: bool = True
 
     # ──────────────────────────────────────────────
     # Retrieval
@@ -125,6 +159,17 @@ class Settings(BaseSettings):
     DEFAULT_TOP_K: int = 5
     DEFAULT_SEARCH_TYPE: str = "hybrid"
     RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    # Number of candidates to fetch from vector DB before cross-encoder reranking.
+    # More candidates = better recall at the cost of reranker latency.
+    RERANK_CANDIDATES: int = 20
+    # Number of chunks to keep after reranking (passed to LLM context window).
+    RERANK_TOP_N: int = 5
+    # Set to False to skip cross-encoder entirely and fall back to cosine-score sort.
+    ENABLE_RERANKING: bool = True
+    # Minimum cosine similarity score below which CriticAgent flags results for human review.
+    # Set to 0.0 to disable HITL interrupts (critic always approves).
+    CRITIC_MIN_SCORE: float = 0.3
+
 
     # ──────────────────────────────────────────────
     # Celery

@@ -6,6 +6,7 @@ retry handling, batching, and error messages.
 """
 
 import logging
+
 from app.core.config import get_settings
 from app.infrastructure.embeddings.base import EmbeddingProvider
 

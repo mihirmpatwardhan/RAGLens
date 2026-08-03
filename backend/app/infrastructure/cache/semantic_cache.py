@@ -6,7 +6,7 @@ Reduces external LLM calls, costs, and response latencies.
 """
 
 import logging
-from typing import Any
+
 from app.infrastructure.embeddings.openai_embeddings import OpenAIEmbeddingProvider
 from app.infrastructure.vector_stores.chroma_store import ChromaVectorStoreAdapter
 

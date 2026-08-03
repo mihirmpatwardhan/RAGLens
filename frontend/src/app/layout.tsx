@@ -1,16 +1,17 @@
 import type { Metadata } from "next";
+import { Toaster } from "react-hot-toast";
+import { CustomAuthProvider } from "@/components/auth/custom-auth-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "RAGLense — Enterprise Knowledge Intelligence Platform",
+  title: "RAGLens - AI Knowledge Studio",
   description:
-    "Explainable, enterprise-ready Multimodal Knowledge Intelligence Platform. Ingest any data, process through visual AI pipelines, and chat with complete transparency.",
+    "Upload documents, build searchable knowledge bases, and chat with grounded answers and pipeline traces.",
   keywords: [
     "RAG",
     "AI",
     "Knowledge Base",
     "LLM",
-    "Enterprise AI",
     "Retrieval Augmented Generation",
     "Vector Database",
     "Document Intelligence",
@@ -23,22 +24,24 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossOrigin="anonymous"
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700;800;900&display=swap"
-          rel="stylesheet"
-        />
-      </head>
+    <html lang="en">
       <body className="antialiased min-h-screen bg-[var(--color-surface-0)] text-[var(--color-text-primary)]">
-        {children}
+        <CustomAuthProvider>
+          {children}
+          <Toaster
+            position="top-right"
+            toastOptions={{
+              duration: 4000,
+              style: {
+                background: "var(--color-surface-50)",
+                border: "1px solid var(--color-border)",
+                color: "var(--color-text-primary)",
+              },
+            }}
+          />
+        </CustomAuthProvider>
       </body>
     </html>
   );
 }
+

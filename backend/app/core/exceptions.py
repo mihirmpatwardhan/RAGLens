@@ -9,13 +9,12 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import ORJSONResponse
 
-
 # ──────────────────────────────────────────────
 # Base Exceptions
 # ──────────────────────────────────────────────
 
 
-class RAGLenseException(Exception):
+class RAGLenseError(Exception):
     """Base exception for all RAGLense errors."""
 
     def __init__(
@@ -32,21 +31,21 @@ class RAGLenseException(Exception):
         super().__init__(self.message)
 
 
-class AuthenticationError(RAGLenseException):
+class AuthenticationError(RAGLenseError):
     """Authentication failure."""
 
     def __init__(self, message: str = "Authentication failed"):
         super().__init__(message=message, status_code=401, error_code="AUTHENTICATION_ERROR")
 
 
-class AuthorizationError(RAGLenseException):
+class AuthorizationError(RAGLenseError):
     """Authorization failure."""
 
     def __init__(self, message: str = "Insufficient permissions"):
         super().__init__(message=message, status_code=403, error_code="AUTHORIZATION_ERROR")
 
 
-class NotFoundError(RAGLenseException):
+class NotFoundError(RAGLenseError):
     """Resource not found."""
 
     def __init__(self, resource: str = "Resource", resource_id: str | None = None):
@@ -56,14 +55,14 @@ class NotFoundError(RAGLenseException):
         super().__init__(message=message, status_code=404, error_code="NOT_FOUND")
 
 
-class ConflictError(RAGLenseException):
+class ConflictError(RAGLenseError):
     """Resource conflict (e.g., duplicate)."""
 
     def __init__(self, message: str = "Resource already exists"):
         super().__init__(message=message, status_code=409, error_code="CONFLICT")
 
 
-class ValidationError(RAGLenseException):
+class ValidationError(RAGLenseError):
     """Business validation error."""
 
     def __init__(self, message: str = "Validation failed", details: dict[str, Any] | None = None):
@@ -75,14 +74,14 @@ class ValidationError(RAGLenseException):
         )
 
 
-class RateLimitError(RAGLenseException):
+class RateLimitError(RAGLenseError):
     """Rate limit exceeded."""
 
     def __init__(self, message: str = "Rate limit exceeded"):
         super().__init__(message=message, status_code=429, error_code="RATE_LIMIT_EXCEEDED")
 
 
-class ExternalServiceError(RAGLenseException):
+class ExternalServiceError(RAGLenseError):
     """External service (LLM, vector DB, etc.) error."""
 
     def __init__(self, service: str, message: str = "External service error"):
@@ -94,7 +93,7 @@ class ExternalServiceError(RAGLenseException):
         )
 
 
-class PipelineError(RAGLenseException):
+class PipelineError(RAGLenseError):
     """Error during pipeline execution."""
 
     def __init__(self, stage: str, message: str = "Pipeline stage failed"):
@@ -114,8 +113,8 @@ class PipelineError(RAGLenseException):
 def register_exception_handlers(app: FastAPI) -> None:
     """Register global exception handlers for the FastAPI app."""
 
-    @app.exception_handler(RAGLenseException)
-    async def raglense_exception_handler(request: Request, exc: RAGLenseException):
+    @app.exception_handler(RAGLenseError)
+    async def raglense_exception_handler(request: Request, exc: RAGLenseError):
         return ORJSONResponse(
             status_code=exc.status_code,
             content={
@@ -129,13 +128,15 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception):
+        import traceback
+        traceback.print_exc()
         return ORJSONResponse(
             status_code=500,
             content={
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": "An unexpected internal error occurred",
-                    "details": {"type": type(exc).__name__},
+                    "details": {"type": type(exc).__name__, "msg": str(exc)},
                 }
             },
         )

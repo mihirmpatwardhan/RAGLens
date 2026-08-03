@@ -1,11 +1,6 @@
 /**
- * RAGLense — TypeScript Type Definitions
- * Core domain types shared across the application.
+ * Shared application types.
  */
-
-// ──────────────────────────────────────────────
-// Auth & User
-// ──────────────────────────────────────────────
 
 export interface User {
   id: string;
@@ -18,22 +13,6 @@ export interface User {
   is_verified: boolean;
   created_at: string;
 }
-
-export interface TokenPair {
-  access_token: string;
-  refresh_token: string;
-  token_type: string;
-  expires_in: number;
-}
-
-export interface AuthResponse {
-  user: User;
-  tokens: TokenPair;
-}
-
-// ──────────────────────────────────────────────
-// Knowledge Base
-// ──────────────────────────────────────────────
 
 export interface KBSettings {
   chunking_strategy: string;
@@ -64,10 +43,6 @@ export interface KnowledgeBase {
   updated_at: string;
 }
 
-// ──────────────────────────────────────────────
-// Documents
-// ──────────────────────────────────────────────
-
 export type DocumentStatus = "uploaded" | "processing" | "ready" | "error";
 
 export interface Document {
@@ -92,10 +67,6 @@ export interface Document {
   updated_at: string;
 }
 
-// ──────────────────────────────────────────────
-// Chunks
-// ──────────────────────────────────────────────
-
 export interface Chunk {
   id: string;
   document_id: string;
@@ -114,10 +85,6 @@ export interface Chunk {
   summary?: string | null;
   created_at: string;
 }
-
-// ──────────────────────────────────────────────
-// Pipeline
-// ──────────────────────────────────────────────
 
 export type PipelineStageStatus = "pending" | "running" | "completed" | "failed" | "skipped";
 
@@ -151,9 +118,25 @@ export interface PipelineRun {
   created_at: string;
 }
 
-// ──────────────────────────────────────────────
-// Chat & Conversations
-// ──────────────────────────────────────────────
+export interface RecentPipelineRun {
+  id: string;
+  document_id: string;
+  document_name: string;
+  document_status: DocumentStatus;
+  knowledge_base_id: string;
+  knowledge_base_name: string;
+  status: string;
+  current_stage?: string | null;
+  progress: number;
+  stages: Record<string, PipelineStage>;
+  total_chunks: number;
+  total_embeddings: number;
+  total_tokens: number;
+  error_message?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
 
 export interface Conversation {
   id: string;
@@ -170,7 +153,7 @@ export interface Conversation {
 
 export interface Citation {
   chunk_id: string;
-  document_id: string;
+  document_id?: string;
   document_name: string;
   content: string;
   page_number?: number;
@@ -196,11 +179,14 @@ export interface RetrievalTrace {
   context_compressed?: string;
   prompt_tokens: number;
   total_latency_ms: number;
-  stages: Record<string, {
-    name: string;
-    duration_ms: number;
-    details: Record<string, unknown>;
-  }>;
+  stages: Record<
+    string,
+    {
+      name: string;
+      duration_ms: number;
+      details: Record<string, unknown>;
+    }
+  >;
 }
 
 export interface Message {
@@ -220,10 +206,6 @@ export interface Message {
   created_at: string;
 }
 
-// ──────────────────────────────────────────────
-// Analytics
-// ──────────────────────────────────────────────
-
 export interface AnalyticsOverview {
   total_knowledge_bases: number;
   total_documents: number;
@@ -240,20 +222,12 @@ export interface AnalyticsOverview {
   queries_this_week: number;
 }
 
-// ──────────────────────────────────────────────
-// Pagination
-// ──────────────────────────────────────────────
-
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;
   page: number;
   page_size: number;
 }
-
-// ──────────────────────────────────────────────
-// Navigation
-// ──────────────────────────────────────────────
 
 export interface NavItem {
   title: string;

@@ -4,6 +4,7 @@ RAGLense - API Dependencies
 Dependency injection for authentication, database sessions, and services.
 """
 
+import uuid
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
@@ -100,3 +101,81 @@ async def get_current_user(
 # Type aliases for cleaner endpoint signatures
 CurrentUser = Annotated[User, Depends(get_current_user)]
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+# ──────────────────────────────────────────────
+# RBAC Dependency Factories (Phase 6)
+# ──────────────────────────────────────────────
+
+_ROLE_HIERARCHY = {"owner": 3, "editor": 2, "viewer": 1}
+
+
+async def get_kb_role(
+    kb_id: uuid.UUID,
+    user: User,
+    db: AsyncSession,
+) -> str | None:
+    """Return the current user's role in the given KB, or None if no membership."""
+    from sqlalchemy import select as sa_select
+
+    from app.infrastructure.db.models.knowledge import KnowledgeBase
+    from app.infrastructure.db.models.rbac import KnowledgeBaseMember
+
+    # KB owners are implicitly 'owner' regardless of members table
+    kb_result = await db.execute(
+        sa_select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
+    )
+    kb = kb_result.scalar_one_or_none()
+    if kb is None:
+        return None
+    if kb.owner_id == user.id:
+        return "owner"
+
+    # Check members table
+    member_result = await db.execute(
+        sa_select(KnowledgeBaseMember).where(
+            KnowledgeBaseMember.knowledge_base_id == kb_id,
+            KnowledgeBaseMember.user_id == user.id,
+        )
+    )
+    member = member_result.scalar_one_or_none()
+    return member.role if member else None
+
+
+def require_kb_role(minimum_role: str):
+    """FastAPI dependency factory: assert user has at least `minimum_role` in the KB.
+
+    Usage::
+        @router.delete("/{kb_id}")
+        async def delete_kb(kb_id: uuid.UUID, _: Annotated[None, Depends(require_kb_role("owner"))]):
+            ...
+    """
+    async def _dependency(
+        kb_id: uuid.UUID,
+        current_user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)],
+    ) -> None:
+        role = await get_kb_role(kb_id, current_user, db)
+
+        if role is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Knowledge base not found",
+            )
+
+        required_level = _ROLE_HIERARCHY.get(minimum_role, 1)
+        user_level = _ROLE_HIERARCHY.get(role, 0)
+
+        if user_level < required_level:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires '{minimum_role}' role in this knowledge base. Your role: '{role}'.",
+            )
+
+    return _dependency
+
+
+# Convenience type aliases — import these in routers
+RequireKBOwner = Annotated[None, Depends(require_kb_role("owner"))]
+RequireKBEditor = Annotated[None, Depends(require_kb_role("editor"))]
+RequireKBViewer = Annotated[None, Depends(require_kb_role("viewer"))]

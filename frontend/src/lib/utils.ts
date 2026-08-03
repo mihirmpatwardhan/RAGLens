@@ -1,35 +1,22 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
-/**
- * Merge Tailwind classes with conflict resolution.
- * Usage: cn("bg-red-500", conditional && "bg-blue-500")
- */
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/**
- * Format bytes to human-readable string.
- */
 export function formatBytes(bytes: number, decimals = 1): string {
   if (bytes === 0) return "0 B";
-  const k = 1024;
+  const unit = 1024;
   const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${sizes[i]}`;
+  const index = Math.floor(Math.log(bytes) / Math.log(unit));
+  return `${parseFloat((bytes / Math.pow(unit, index)).toFixed(decimals))} ${sizes[index]}`;
 }
 
-/**
- * Format number with commas.
- */
 export function formatNumber(num: number): string {
   return new Intl.NumberFormat().format(num);
 }
 
-/**
- * Format milliseconds to human-readable duration.
- */
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
@@ -38,13 +25,10 @@ export function formatDuration(ms: number): string {
   return `${mins}m ${secs}s`;
 }
 
-/**
- * Format a date to relative time (e.g., "2 hours ago").
- */
 export function formatRelativeTime(date: Date | string): string {
   const now = new Date();
-  const d = typeof date === "string" ? new Date(date) : date;
-  const diffMs = now.getTime() - d.getTime();
+  const target = typeof date === "string" ? new Date(date) : date;
+  const diffMs = now.getTime() - target.getTime();
   const diffSecs = Math.floor(diffMs / 1000);
   const diffMins = Math.floor(diffSecs / 60);
   const diffHours = Math.floor(diffMins / 60);
@@ -54,33 +38,31 @@ export function formatRelativeTime(date: Date | string): string {
   if (diffMins < 60) return `${diffMins}m ago`;
   if (diffHours < 24) return `${diffHours}h ago`;
   if (diffDays < 7) return `${diffDays}d ago`;
-  return d.toLocaleDateString();
+  return target.toLocaleDateString();
 }
 
-/**
- * Truncate a string to a maximum length.
- */
 export function truncate(str: string, maxLength: number): string {
   if (str.length <= maxLength) return str;
-  return str.slice(0, maxLength - 3) + "...";
+  return `${str.slice(0, maxLength - 3)}...`;
 }
 
-/**
- * Generate a random color from the brand palette.
- */
 export const BRAND_COLORS = [
-  "#6366f1", "#8b5cf6", "#a78bfa", "#06b6d4",
-  "#14b8a6", "#22c55e", "#f59e0b", "#ef4444",
-  "#ec4899", "#f97316",
+  "#f59e0b",
+  "#d97706",
+  "#fbbf24",
+  "#06b6d4",
+  "#22d3ee",
+  "#34d399",
+  "#e879f9",
+  "#ef4444",
+  "#d946ef",
+  "#f97316",
 ];
 
 export function getRandomColor(): string {
   return BRAND_COLORS[Math.floor(Math.random() * BRAND_COLORS.length)];
 }
 
-/**
- * File type to icon mapping.
- */
 export function getFileIcon(mimeType: string): string {
   if (mimeType.includes("pdf")) return "📄";
   if (mimeType.includes("word") || mimeType.includes("document")) return "📝";

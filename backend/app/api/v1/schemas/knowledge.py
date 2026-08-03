@@ -1,13 +1,13 @@
-"""
-RAGLense - API Schemas for Knowledge Base & Documents
-
-Pydantic models for knowledge base and document operations.
-"""
+"""API schemas for knowledge bases, documents, pipelines, and chat."""
 
 import uuid
 from datetime import datetime
 
 from pydantic import BaseModel, Field
+
+from app.core.config import get_settings
+
+settings = get_settings()
 
 
 # ──────────────────────────────────────────────
@@ -18,17 +18,17 @@ from pydantic import BaseModel, Field
 class KBSettingsSchema(BaseModel):
     """Knowledge base processing settings."""
 
-    chunking_strategy: str = "recursive"
-    chunk_size: int = 512
-    chunk_overlap: int = 50
-    embedding_model: str = "text-embedding-3-small"
-    embedding_provider: str = "openai"
-    vector_db: str = "chroma"
-    llm_model: str = "gpt-4o"
-    llm_provider: str = "openai"
-    search_type: str = "hybrid"
-    top_k: int = 5
-    temperature: float = 0.1
+    chunking_strategy: str = settings.DEFAULT_CHUNKING_STRATEGY
+    chunk_size: int = settings.DEFAULT_CHUNK_SIZE
+    chunk_overlap: int = settings.DEFAULT_CHUNK_OVERLAP
+    embedding_model: str = settings.DEFAULT_EMBEDDING_MODEL
+    embedding_provider: str = settings.DEFAULT_EMBEDDING_PROVIDER
+    vector_db: str = settings.VECTOR_DB_PROVIDER
+    llm_model: str = settings.DEFAULT_LLM_MODEL
+    llm_provider: str = settings.DEFAULT_LLM_PROVIDER
+    search_type: str = settings.DEFAULT_SEARCH_TYPE
+    top_k: int = settings.DEFAULT_TOP_K
+    temperature: float = settings.DEFAULT_TEMPERATURE
 
 
 class CreateKBRequest(BaseModel):
@@ -38,7 +38,7 @@ class CreateKBRequest(BaseModel):
     description: str | None = None
     icon: str = "📚"
     color: str = "#6366f1"
-    settings: KBSettingsSchema = KBSettingsSchema()
+    settings: KBSettingsSchema = Field(default_factory=KBSettingsSchema)
 
 
 class UpdateKBRequest(BaseModel):
@@ -187,6 +187,35 @@ class PipelineRunResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RecentPipelineRunResponse(BaseModel):
+    """Recent pipeline run summary for dashboard views."""
+
+    id: uuid.UUID
+    document_id: uuid.UUID
+    document_name: str
+    document_status: str
+    knowledge_base_id: uuid.UUID
+    knowledge_base_name: str
+    status: str
+    current_stage: str | None
+    progress: float
+    stages: dict
+    total_chunks: int
+    total_embeddings: int
+    total_tokens: int
+    error_message: str | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+
+
+class RecentPipelineRunListResponse(BaseModel):
+    """Paginated list of recent pipeline runs."""
+
+    items: list[RecentPipelineRunResponse]
+    total: int
+
+
 # ──────────────────────────────────────────────
 # Chat Schemas
 # ──────────────────────────────────────────────
@@ -197,8 +226,8 @@ class CreateConversationRequest(BaseModel):
 
     title: str = "New Conversation"
     knowledge_base_id: uuid.UUID | None = None
-    model: str = "gpt-4o"
-    temperature: float = 0.1
+    model: str | None = None
+    temperature: float | None = None
     system_prompt: str | None = None
 
 

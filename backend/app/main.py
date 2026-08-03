@@ -9,16 +9,27 @@ import logging
 import sys
 import time
 import uuid as uuid_mod
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 
+from app.api.v1.routers import (
+    agents,
+    analytics,
+    auth,
+    chat,
+    documents,
+    health,
+    knowledge_bases,
+    members,
+    playground,
+    prompts,
+)
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
-from app.api.v1.routers import auth, health, knowledge_bases, documents, chat, playground, analytics, agents
 
 settings = get_settings()
 
@@ -75,7 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "Pipeline will operate in degraded mode."
         )
 
-    logger.info(f"  Status:      [OK] Ready to serve requests")
+    logger.info("  Status:      [OK] Ready to serve requests")
 
     yield
 
@@ -123,7 +134,7 @@ def create_app() -> FastAPI:
         duration_ms = int((time.time() - start_time) * 1000)
         logger.info(
             f"[{request_id}] {request.method} {request.url.path} "
-            f"→ {response.status_code} ({duration_ms}ms)"
+            f"-> {response.status_code} ({duration_ms}ms)"
         )
 
         response.headers["X-Request-ID"] = request_id
@@ -137,6 +148,14 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
+
+    # ── Large file upload support (configurable) ──
+    # Starlette's default multipart limit is 1 MB — override here so large files
+    # are forwarded to the upload endpoint instead of being silently dropped.
+    import starlette.formparsers as _fp
+    from starlette.datastructures import UploadFile as StarletteUploadFile  # noqa: F401
+    from starlette.middleware.exceptions import ExceptionMiddleware  # noqa: F401
+    _fp.MAX_UPLOAD_SIZE = settings.MAX_UPLOAD_SIZE_BYTES  # use configured limit
 
     # ──────────────────────────────────────────────
     # Exception Handlers
@@ -156,8 +175,10 @@ def create_app() -> FastAPI:
     app.include_router(documents.router, prefix=api_prefix)
     app.include_router(chat.router, prefix=api_prefix)
     app.include_router(playground.router, prefix=api_prefix)
+    app.include_router(prompts.router, prefix=api_prefix)
     app.include_router(analytics.router, prefix=api_prefix)
     app.include_router(agents.router, prefix=api_prefix)
+    app.include_router(members.router, prefix=api_prefix)
 
     return app
 

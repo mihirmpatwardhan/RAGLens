@@ -28,8 +28,14 @@ class VectorStoreAdapter(ABC):
         collection_name: str,
         query_embedding: list[float],
         top_k: int = 5,
+        filters: dict | None = None,
     ) -> list[dict]:
-        """Perform semantic search using embedding vector comparison."""
+        """Perform semantic search using embedding vector comparison.
+
+        Args:
+            filters: Optional metadata filter dict. Format:
+                {"must": [{"key": "<field>", "range": {"gte": ..., "lte": ...}}]}
+        """
         pass
 
     @abstractmethod

@@ -4,35 +4,36 @@ import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { Search, Bell, PanelRight, Command } from "lucide-react";
 import { useThemeStore } from "@/stores/theme-store";
-import { useAuthStore } from "@/stores/auth-store";
+import { useAppUser } from "@/hooks/use-auth";
+import { AppUserButton } from "@/components/auth/app-user-button";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 
 const ROUTE_TITLES: Record<string, string> = {
   "/dashboard": "Chat",
-  "/dashboard/knowledge": "Knowledge Bases",
-  "/dashboard/documents": "Documents",
-  "/dashboard/pipelines": "Pipelines",
-  "/dashboard/playground": "Model Arena",
-  "/dashboard/prompts": "Prompt Lab",
-  "/dashboard/agents": "Agents",
+  "/dashboard/knowledge": "My Workspaces",
+  "/dashboard/documents": "My Files",
+  "/dashboard/pipelines": "Workflows",
+  "/dashboard/playground": "Try AI Models",
+  "/dashboard/prompts": "Custom Instructions",
+  "/dashboard/agents": "AI Agents",
   "/dashboard/analytics": "Analytics",
-  "/dashboard/evaluation": "Evaluation",
-  "/dashboard/experiments": "Experiments",
+  "/dashboard/evaluation": "Quality Check",
+  "/dashboard/experiments": "A/B Tests",
   "/dashboard/settings": "Settings",
 };
 
 export function Header() {
   const pathname = usePathname();
   const { setCommandPaletteOpen, rightPanelOpen, toggleRightPanel } = useThemeStore();
-  const { user } = useAuthStore();
+  const { user } = useAppUser();
 
-  const title = ROUTE_TITLES[pathname] || "RAGLense";
+  const title = ROUTE_TITLES[pathname] || "RAGLens";
 
   // Typewriter placeholder animation
   const [placeholder, setPlaceholder] = useState("Search anything...");
   useEffect(() => {
-    const texts = ["Search documents...", "Go to Pipelines...", "Find Knowledge bases...", "Search chat logs..."];
+    const texts = ["Search your files...", "Go to Workflows...", "Find a Workspace...", "Search chats..."];
     let textIdx = 0;
     let charIdx = 0;
     let isDeleting = false;
@@ -90,7 +91,7 @@ export function Header() {
       {/* Center: Search with typewriter & expand focus */}
       <motion.button
         onClick={() => setCommandPaletteOpen(true)}
-        whileHover={{ scale: 1.01, boxShadow: "0 0 16px rgba(124, 58, 237, 0.12)" }}
+        whileHover={{ scale: 1.01, boxShadow: "0 0 16px rgba(245, 158, 11, 0.12)" }}
         className="hidden sm:flex items-center gap-3 px-4 py-2 rounded-xl bg-[var(--color-surface-200)]/70 border border-[var(--color-border)] hover:border-[var(--color-brand-500)]/30 transition-all cursor-pointer group max-w-xs hover:max-w-md w-full mx-8"
       >
         <Search className="w-4 h-4 text-[var(--color-text-muted)] group-hover:text-[var(--color-brand-400)] transition-colors" />
@@ -120,7 +121,7 @@ export function Header() {
             className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[var(--color-brand-500)]"
             animate={{ scale: [1, 1.25, 1] }}
             transition={{ duration: 2, repeat: Infinity }}
-            style={{ boxShadow: "0 0 6px rgba(124, 58, 237, 0.5)" }}
+            style={{ boxShadow: "0 0 6px rgba(245, 158, 11, 0.5)" }}
           />
         </motion.button>
 
@@ -140,23 +141,10 @@ export function Header() {
         </motion.button>
 
         {/* User Avatar */}
-        <motion.button
-          whileHover={{ scale: 1.08 }}
-          whileTap={{ scale: 0.95 }}
-          className="relative ml-1"
-        >
-          {/* Animated gradient ring */}
-          <div 
-            className="absolute -inset-0.5 rounded-xl bg-gradient-to-r from-[var(--color-brand-500)] via-[var(--color-accent-400)] to-[var(--color-rose-400)] opacity-70 animate-breathe" 
-            style={{ 
-              animation: "breathe 3s ease-in-out infinite, spin-slow 12s linear infinite",
-              boxShadow: "0 0 10px rgba(124, 58, 237, 0.25)"
-            }} 
-          />
-          <div className="relative w-9 h-9 rounded-xl bg-gradient-to-br from-[var(--color-brand-600)] to-[var(--color-accent-500)] flex items-center justify-center text-white text-sm font-bold font-display shadow-md">
-            {user?.full_name?.charAt(0)?.toUpperCase() || "U"}
-          </div>
-        </motion.button>
+        <div className="ml-1 flex items-center">
+          <AppUserButton />
+          <span className="sr-only">{user?.fullName || "Account"}</span>
+        </div>
       </div>
     </header>
   );

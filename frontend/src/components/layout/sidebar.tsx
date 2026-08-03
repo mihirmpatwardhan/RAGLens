@@ -36,38 +36,62 @@ interface NavGroup {
   items: NavItem[];
 }
 
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { apiClient } from "@/lib/api-client";
+
+interface Conversation {
+  id: string;
+  title: string;
+  created_at: string;
+}
+
 const NAV_GROUPS: NavGroup[] = [
   {
-    title: "AI Studio",
+    title: "Work",
     items: [
-      { title: "Chat", href: "/dashboard", icon: MessageSquare },
-      { title: "Knowledge Bases", href: "/dashboard/knowledge", icon: Database },
-      { title: "Documents", href: "/dashboard/documents", icon: FileText },
-      { title: "Pipelines", href: "/dashboard/pipelines", icon: GitBranch },
+      { title: "My Workspaces", href: "/dashboard/knowledge", icon: Database },
+      { title: "My Files", href: "/dashboard/documents", icon: FileText },
+      { title: "Workflows", href: "/dashboard/pipelines", icon: GitBranch },
     ],
   },
   {
-    title: "Playground",
+    title: "Explore",
     items: [
-      { title: "Model Arena", href: "/dashboard/playground", icon: Beaker },
-      { title: "Prompt Lab", href: "/dashboard/prompts", icon: Sparkles },
-      { title: "Agents", href: "/dashboard/agents", icon: Layers, badge: "Multi" },
+      { title: "Try AI Models", href: "/dashboard/playground", icon: Beaker },
+      { title: "Custom Instructions", href: "/dashboard/prompts", icon: Sparkles },
+      { title: "AI Agents", href: "/dashboard/agents", icon: Layers, badge: "New" },
     ],
   },
   {
-    title: "Observability",
+    title: "Insights",
     items: [
       { title: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
-      { title: "Evaluation", href: "/dashboard/evaluation", icon: Target },
-      { title: "Experiments", href: "/dashboard/experiments", icon: FlaskConical },
+      { title: "Quality Check", href: "/dashboard/evaluation", icon: Target },
+      { title: "A/B Tests", href: "/dashboard/experiments", icon: FlaskConical },
     ],
   },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { sidebarCollapsed, toggleSidebar } = useThemeStore();
   const { user } = useAuthStore();
+  const [recentChats, setRecentChats] = useState<Conversation[]>([]);
+
+  useEffect(() => {
+    async function loadRecentChats() {
+      if (!user) return;
+      try {
+        const { data } = await apiClient.get("/chat/conversations");
+        setRecentChats(data.slice(0, 15));
+      } catch (e) {
+        console.error("Failed to load recent chats", e);
+      }
+    }
+    loadRecentChats();
+  }, [user, pathname, searchParams]);
 
   return (
     <aside
@@ -146,8 +170,62 @@ export function Sidebar() {
           </Link>
         </div>
 
-        {/* Navigation */}
         <nav className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-2 space-y-6">
+          
+          {/* Recent Chats Section */}
+          <div>
+            <AnimatePresence>
+              {!sidebarCollapsed && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex items-center gap-2 mb-2 px-3"
+                >
+                  <div className="h-px flex-1 bg-gradient-to-r from-[var(--color-brand-500)]/30 to-transparent" />
+                  <p className="text-[9px] font-bold uppercase tracking-widest text-[var(--color-text-muted)] font-display">
+                    Recent Chats
+                  </p>
+                  <div className="h-px flex-1 bg-gradient-to-l from-[var(--color-accent-500)]/30 to-transparent" />
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <div className="space-y-0.5">
+              {recentChats.map((chat) => {
+                const isActive = searchParams?.get("chat") === chat.id;
+                return (
+                  <Link
+                    key={chat.id}
+                    href={`/dashboard?chat=${chat.id}`}
+                    className={cn(
+                      "flex items-center gap-3 rounded-xl transition-all duration-200 relative group",
+                      sidebarCollapsed
+                        ? "w-10 h-10 justify-center mx-auto"
+                        : "px-3 py-2.5",
+                      isActive
+                        ? "text-[var(--color-brand-400)] bg-[var(--color-brand-500)]/5"
+                        : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-200)]/50"
+                    )}
+                  >
+                    <MessageSquare className="w-[18px] h-[18px] min-w-[18px]" />
+                    {!sidebarCollapsed && (
+                      <span className="text-sm font-semibold flex-1 truncate font-display">
+                        {chat.title || "New Chat"}
+                      </span>
+                    )}
+                    {/* Tooltip for collapsed state */}
+                    {sidebarCollapsed && (
+                      <div className="absolute left-full ml-2 px-3 py-1.5 rounded-lg bg-[var(--color-surface-400)] text-xs text-[var(--color-text-primary)] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-xl border border-[var(--color-border)] font-display">
+                        {chat.title || "New Chat"}
+                      </div>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+
           {NAV_GROUPS.map((group) => (
             <div key={group.title}>
               <AnimatePresence>

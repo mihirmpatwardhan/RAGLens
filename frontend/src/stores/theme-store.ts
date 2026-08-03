@@ -1,5 +1,5 @@
 /**
- * RAGLense — Theme Store
+ * RAGLens — Theme Store
  * Manages theme, sidebar, and layout state via Zustand.
  */
 
@@ -70,7 +70,7 @@ export const useThemeStore = create<ThemeState>()(
       setActiveView: (view) => set({ activeView: view }),
     }),
     {
-      name: "RAGLense-theme",
+      name: "RAGLens-theme",
       partialize: (state) => ({
         theme: state.theme,
         sidebarCollapsed: state.sidebarCollapsed,

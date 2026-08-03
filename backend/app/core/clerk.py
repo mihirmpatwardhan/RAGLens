@@ -5,10 +5,12 @@ Provides token verification for Clerk JWTs using JWKS keys.
 Includes TTL-based JWKS cache to handle key rotation.
 """
 
-import time
-import httpx
 import logging
-from jose import jwt, JWTError
+import time
+
+import httpx
+from jose import JWTError, jwt
+
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)

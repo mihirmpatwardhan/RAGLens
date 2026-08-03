@@ -38,19 +38,19 @@ export function CommandPalette() {
   const allCommands: CommandItem[] = [
     // Navigation
     { id: "chat", title: "Go to Chat", icon: MessageSquare, action: () => router.push("/dashboard"), group: "Navigation" },
-    { id: "knowledge", title: "Go to Knowledge Bases", icon: Database, action: () => router.push("/dashboard/knowledge"), group: "Navigation" },
-    { id: "documents", title: "Go to Documents", icon: FileText, action: () => router.push("/dashboard/documents"), group: "Navigation" },
-    { id: "pipelines", title: "Go to Pipelines", icon: GitBranch, action: () => router.push("/dashboard/pipelines"), group: "Navigation" },
-    { id: "playground", title: "Go to Model Arena", icon: Beaker, action: () => router.push("/dashboard/playground"), group: "Navigation" },
-    { id: "prompts", title: "Go to Prompt Lab", icon: Sparkles, action: () => router.push("/dashboard/prompts"), group: "Navigation" },
-    { id: "agents", title: "Go to Agents", icon: Layers, action: () => router.push("/dashboard/agents"), group: "Navigation" },
+    { id: "knowledge", title: "Go to My Workspaces", icon: Database, action: () => router.push("/dashboard/knowledge"), group: "Navigation" },
+    { id: "documents", title: "Go to My Files", icon: FileText, action: () => router.push("/dashboard/documents"), group: "Navigation" },
+    { id: "pipelines", title: "Go to Workflows", icon: GitBranch, action: () => router.push("/dashboard/pipelines"), group: "Navigation" },
+    { id: "playground", title: "Try AI Models", icon: Beaker, action: () => router.push("/dashboard/playground"), group: "Navigation" },
+    { id: "prompts", title: "Go to Custom Instructions", icon: Sparkles, action: () => router.push("/dashboard/prompts"), group: "Navigation" },
+    { id: "agents", title: "Go to AI Agents", icon: Layers, action: () => router.push("/dashboard/agents"), group: "Navigation" },
     { id: "analytics", title: "Go to Analytics", icon: BarChart3, action: () => router.push("/dashboard/analytics"), group: "Navigation" },
-    { id: "eval", title: "Go to Evaluation", icon: Target, action: () => router.push("/dashboard/evaluation"), group: "Navigation" },
+    { id: "eval", title: "Go to Quality Check", icon: Target, action: () => router.push("/dashboard/evaluation"), group: "Navigation" },
     { id: "settings", title: "Go to Settings", icon: Settings, action: () => router.push("/dashboard/settings"), group: "Navigation" },
     // Actions
     { id: "new-chat", title: "New Chat", subtitle: "Start a new conversation", icon: Plus, action: () => router.push("/dashboard"), group: "Actions" },
-    { id: "new-kb", title: "New Knowledge Base", subtitle: "Create a knowledge base", icon: Plus, action: () => router.push("/dashboard/knowledge"), group: "Actions" },
-    { id: "upload", title: "Upload Document", subtitle: "Upload a file to process", icon: FileText, action: () => router.push("/dashboard/documents"), group: "Actions" },
+    { id: "new-kb", title: "New Workspace", subtitle: "Create a workspace to organise your files", icon: Plus, action: () => router.push("/dashboard/knowledge"), group: "Actions" },
+    { id: "upload", title: "Upload a File", subtitle: "Upload a file to your workspace", icon: FileText, action: () => router.push("/dashboard/documents"), group: "Actions" },
   ];
 
   const filteredCommands = query

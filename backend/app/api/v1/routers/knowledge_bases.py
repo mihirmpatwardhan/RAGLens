@@ -7,9 +7,15 @@ CRUD operations for knowledge bases.
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
-from app.api.v1.deps import CurrentUser, DbSession
+from app.api.v1.deps import (
+    CurrentUser,
+    DbSession,
+    RequireKBEditor,
+    RequireKBOwner,
+    RequireKBViewer,
+)
 from app.api.v1.schemas.knowledge import (
     CreateKBRequest,
     KBListResponse,
@@ -17,6 +23,7 @@ from app.api.v1.schemas.knowledge import (
     UpdateKBRequest,
 )
 from app.infrastructure.db.models.knowledge import KnowledgeBase
+from app.infrastructure.db.models.rbac import KnowledgeBaseMember
 
 router = APIRouter(prefix="/knowledge-bases", tags=["Knowledge Bases"])
 
@@ -63,19 +70,34 @@ async def list_knowledge_bases(
     offset = (page - 1) * page_size
 
     # Count
-    count_result = await db.execute(
-        select(func.count()).where(KnowledgeBase.owner_id == current_user.id)
+    count_query = (
+        select(func.count(func.distinct(KnowledgeBase.id)))
+        .outerjoin(KnowledgeBaseMember, KnowledgeBase.id == KnowledgeBaseMember.knowledge_base_id)
+        .where(
+            or_(
+                KnowledgeBase.owner_id == current_user.id,
+                KnowledgeBaseMember.user_id == current_user.id,
+            )
+        )
     )
-    total = count_result.scalar() or 0
+    total = (await db.execute(count_query)).scalar() or 0
 
     # Fetch
-    result = await db.execute(
+    fetch_query = (
         select(KnowledgeBase)
-        .where(KnowledgeBase.owner_id == current_user.id)
+        .outerjoin(KnowledgeBaseMember, KnowledgeBase.id == KnowledgeBaseMember.knowledge_base_id)
+        .where(
+            or_(
+                KnowledgeBase.owner_id == current_user.id,
+                KnowledgeBaseMember.user_id == current_user.id,
+            )
+        )
+        .distinct()
         .order_by(KnowledgeBase.updated_at.desc())
         .offset(offset)
         .limit(page_size)
     )
+    result = await db.execute(fetch_query)
     items = [KBResponse.model_validate(kb) for kb in result.scalars().all()]
 
     return KBListResponse(items=items, total=total, page=page, page_size=page_size)
@@ -90,12 +112,12 @@ async def get_knowledge_base(
     kb_id: uuid.UUID,
     current_user: CurrentUser,
     db: DbSession,
+    _: RequireKBViewer,
 ):
     """Get a single knowledge base by ID."""
     result = await db.execute(
         select(KnowledgeBase).where(
             KnowledgeBase.id == kb_id,
-            KnowledgeBase.owner_id == current_user.id,
         )
     )
     kb = result.scalar_one_or_none()
@@ -119,12 +141,12 @@ async def update_knowledge_base(
     request: UpdateKBRequest,
     current_user: CurrentUser,
     db: DbSession,
+    _: RequireKBEditor,
 ):
     """Update a knowledge base's name, description, or settings."""
     result = await db.execute(
         select(KnowledgeBase).where(
             KnowledgeBase.id == kb_id,
-            KnowledgeBase.owner_id == current_user.id,
         )
     )
     kb = result.scalar_one_or_none()
@@ -157,12 +179,12 @@ async def delete_knowledge_base(
     kb_id: uuid.UUID,
     current_user: CurrentUser,
     db: DbSession,
+    _: RequireKBOwner,
 ):
     """Delete a knowledge base and all associated documents/chunks."""
     result = await db.execute(
         select(KnowledgeBase).where(
             KnowledgeBase.id == kb_id,
-            KnowledgeBase.owner_id == current_user.id,
         )
     )
     kb = result.scalar_one_or_none()

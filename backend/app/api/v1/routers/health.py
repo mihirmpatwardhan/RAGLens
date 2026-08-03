@@ -4,7 +4,7 @@ RAGLense - Health Check Router
 System health, readiness, and version endpoints.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter
 
@@ -21,7 +21,7 @@ async def health_check():
         "status": "healthy",
         "service": settings.APP_NAME,
         "version": settings.APP_VERSION,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
 
@@ -40,7 +40,7 @@ async def readiness_check():
     return {
         "status": "ready" if all_healthy else "degraded",
         "checks": checks,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
 

@@ -1,40 +1,46 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
+import { Brain, CheckCircle2, Loader2, ArrowRight, ShieldAlert } from "lucide-react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
-import { Brain, Mail, Lock, User, Building2, ArrowRight, Github, Chrome, Eye, EyeOff, Sparkles, Shield, Zap } from "lucide-react";
 import { useAuthStore } from "@/stores/auth-store";
 import { apiClient, getErrorMessage } from "@/lib/api-client";
-import { cn } from "@/lib/utils";
+import toast from "react-hot-toast";
 
 export default function RegisterPage() {
-  const router = useRouter();
-  const { setAuth } = useAuthStore();
-  const [formData, setFormData] = useState({
-    full_name: "",
-    email: "",
-    password: "",
-    organization: "",
-  });
-  const [showPassword, setShowPassword] = useState(false);
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [organization, setOrganization] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [focusedField, setFocusedField] = useState<string | null>(null);
-
-  function updateField(field: string, value: string) {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-  }
+  const router = useRouter();
+  const { setUser } = useAuthStore();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    setLoading(true);
 
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+
+    setLoading(true);
     try {
-      const { data } = await apiClient.post("/auth/register", formData);
-      setAuth(data.user, data.tokens);
+      await apiClient.post("/auth/register", {
+        email,
+        password,
+        full_name: fullName,
+        organization: organization || null,
+      });
+
+      const { data } = await apiClient.post("/auth/login", { email, password });
+      localStorage.setItem("raglens_token", data.access_token);
+      setUser(data.user);
+      toast.success("Welcome to RAGLens!");
       router.push("/dashboard");
     } catch (err) {
       setError(getErrorMessage(err));
@@ -44,299 +50,174 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex relative overflow-hidden bg-[var(--color-surface-0)]">
-      {/* ── Background ── */}
-      <div className="fixed inset-0 bg-dot-grid opacity-20 pointer-events-none" />
-      <div className="fixed inset-0 bg-aurora-animated pointer-events-none" />
+    <main className="min-h-screen grid lg:grid-cols-[1fr_500px] bg-[var(--color-surface-0)] relative overflow-hidden">
+      <div className="absolute inset-0 bg-dot-grid opacity-15 pointer-events-none z-0" />
+      <div className="absolute bottom-1/4 right-1/4 w-[350px] h-[350px] rounded-full bg-[var(--color-accent-500)]/5 filter blur-3xl pointer-events-none z-0 animate-float" />
 
-      {/* Floating Particles */}
-      <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
-        {[...Array(12)].map((_, i) => (
-          <motion.div
-            key={i}
-            className="absolute w-1.5 h-1.5 rounded-full bg-[var(--color-accent-400)]/20"
-            style={{
-              top: `${Math.random() * 100}%`,
-              left: `${Math.random() * 100}%`,
-            }}
-            animate={{
-              y: [0, -40, 0],
-              opacity: [0.2, 0.7, 0.2],
-            }}
-            transition={{
-              duration: 5 + Math.random() * 5,
-              repeat: Infinity,
-              ease: "easeInOut",
-              delay: Math.random() * 2,
-            }}
-          />
-        ))}
-      </div>
+      {/* Left panel */}
+      <section className="hidden lg:flex flex-col justify-between p-12 border-r border-[var(--color-border)] bg-[var(--color-surface-50)]/50 backdrop-blur-md relative z-10">
+        <Link href="/" className="flex items-center gap-3 w-fit">
+          <span className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[var(--color-brand-600)] to-[var(--color-accent-500)] text-white flex items-center justify-center shadow-lg">
+            <Brain className="w-5 h-5" />
+          </span>
+          <span className="font-display text-xl font-bold tracking-tight">RAGLens</span>
+        </Link>
 
-      {/* ── Left Side — Branding ── */}
-      <div className="hidden lg:flex lg:flex-1 items-center justify-center relative">
-        <div className="orb orb-teal w-[400px] h-[400px] top-10 -left-20" />
-        <div className="orb orb-violet w-[350px] h-[350px] bottom-20 right-10" />
-        <div className="orb orb-rose w-[250px] h-[250px] top-1/2 left-1/3" />
-
-        <motion.div
-          className="relative z-10 text-center max-w-md px-12"
-          initial={{ opacity: 0, x: -30 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.7, ease: [0.19, 1, 0.22, 1] }}
-        >
-          <motion.div
-            className="w-20 h-20 rounded-2xl bg-gradient-to-br from-[var(--color-accent-400)] to-[var(--color-brand-500)] flex items-center justify-center mx-auto mb-8 glow-accent cursor-default"
-            animate={{ rotate: [0, -5, 5, 0], y: [0, -8, 0], scale: [1, 1.05, 1] }}
-            transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
-          >
-            <Brain className="w-10 h-10 text-white" />
-          </motion.div>
-          <h2 className="text-3xl font-bold font-display mb-4 gradient-text-vivid">
-            Join RAGLense
-          </h2>
-          <p className="text-[var(--color-text-secondary)] text-base leading-relaxed font-display">
-            Create your account and start building intelligent knowledge systems in minutes.
+        <div className="max-w-lg">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--color-text-muted)] mb-4 font-display">
+            Start Clean
           </p>
-
-          {/* Benefits */}
-          <div className="mt-10 space-y-3">
+          <h1 className="font-display text-5xl leading-tight font-bold mb-5 font-display">
+            Verify your email and upload your first file.
+          </h1>
+          <div className="space-y-4 mt-8">
             {[
-              { icon: Zap, text: "Process 40+ file formats" },
-              { icon: Shield, text: "Enterprise-grade security" },
-              { icon: Sparkles, text: "Free tier — no credit card" },
-            ].map((item, i) => (
-              <motion.div
-                key={item.text}
-                initial={{ opacity: 0, x: -16 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.5 + i * 0.15 }}
-                className="flex items-center gap-3 glass-subtle rounded-xl px-4 py-3 text-sm text-[var(--color-text-secondary)] border border-[var(--color-border)] shadow-sm"
-              >
-                <item.icon className="w-4 h-4 text-[var(--color-accent-400)]" />
-                {item.text}
-              </motion.div>
+              "Private knowledge bases per user",
+              "Drag-and-drop document upload",
+              "Trace logs and pipeline runs visualization",
+            ].map((item) => (
+              <p key={item} className="flex items-center gap-3 text-[var(--color-text-secondary)] text-sm font-semibold">
+                <CheckCircle2 className="w-5 h-5 text-[var(--color-success)] flex-shrink-0" />
+                {item}
+              </p>
             ))}
           </div>
-        </motion.div>
-      </div>
+        </div>
 
-      {/* ── Right Side — Form ── */}
-      <div className="flex-1 flex items-center justify-center px-6 lg:px-12 relative z-10">
-        <motion.div
-          initial={{ opacity: 0, y: 24, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.5, ease: [0.19, 1, 0.22, 1] }}
-          className="w-full max-w-md"
-        >
-          {/* Logo (mobile) */}
-          <div className="text-center mb-8 lg:text-left">
-            <Link href="/" className="inline-flex items-center gap-3 mb-6">
-              <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[var(--color-brand-500)] to-[var(--color-accent-400)] flex items-center justify-center glow-brand">
-                <Brain className="w-6 h-6 text-white" />
-              </div>
-              <span className="text-xl font-bold tracking-tight font-display">
-                <span className="gradient-text font-display">RAGLense</span>{" "}
-                <span className="text-[var(--color-text-secondary)] font-display">Studio</span>
-              </span>
-            </Link>
-            <h1 className="text-2xl font-bold mb-1 font-display">Create your account</h1>
-            <p className="text-[var(--color-text-secondary)] text-sm font-display">
-              Start building your knowledge intelligence platform
-            </p>
+        <p className="text-xs text-[var(--color-text-muted)]">
+          Already registered?{" "}
+          <Link href="/login" className="text-[var(--color-brand-600)] font-semibold hover:underline">
+            Sign in
+          </Link>
+        </p>
+      </section>
+
+      {/* Right panel / Form */}
+      <section className="flex items-center justify-center px-6 py-12 relative z-10">
+        <div className="w-full max-w-md">
+          <div className="lg:hidden flex items-center gap-3 mb-8">
+            <span className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[var(--color-brand-600)] to-[var(--color-accent-500)] text-white flex items-center justify-center shadow-lg">
+              <Brain className="w-5 h-5" />
+            </span>
+            <span className="font-display text-xl font-bold tracking-tight">RAGLens</span>
           </div>
 
-          <div className="glass-card rounded-2xl p-8 border border-[var(--color-border)] shadow-2xl relative overflow-hidden">
-            <div className="grid grid-cols-2 gap-3 mb-6 relative z-10">
-              <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl glass-interactive text-sm font-medium group border border-[var(--color-border)]">
-                <Chrome className="w-4 h-4 group-hover:text-[var(--color-brand-400)] transition-colors" /> Google
-              </button>
-              <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl glass-interactive text-sm font-medium group border border-[var(--color-border)]">
-                <Github className="w-4 h-4 group-hover:text-[var(--color-text-primary)] transition-colors" /> GitHub
-              </button>
-            </div>
-
-            <div className="relative my-6 relative z-10">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-[var(--color-border)]" />
+            <div className="rounded-3xl border border-[var(--color-border)] bg-[var(--color-surface-50)]/90 backdrop-blur-xl p-8 shadow-2xl space-y-6">
+              <div>
+                <h2 className="font-display text-2xl font-bold">Create an Account</h2>
+                <p className="mt-1.5 text-xs text-[var(--color-text-muted)] leading-5">
+                  Sign up to configure your private knowledge study workspace.
+                </p>
               </div>
-              <div className="relative flex justify-center text-xs">
-                <span className="px-3 bg-[var(--color-surface-100)] text-[var(--color-text-muted)] rounded-full">
-                  or continue with email
-                </span>
-              </div>
-            </div>
 
-            <form onSubmit={handleSubmit} className="space-y-5 relative z-10">
               {error && (
-                <motion.div
-                  initial={{ opacity: 0, y: -8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm font-display"
-                >
-                  {error}
-                </motion.div>
+                <div className="flex gap-2.5 rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-xs font-semibold text-red-600">
+                  <ShieldAlert className="w-4 h-4 flex-shrink-0" />
+                  <span>{error}</span>
+                </div>
               )}
 
-              {/* Full Name Input */}
-              <div className="relative">
-                <input
-                  id="fullname-input"
-                  type="text"
-                  value={formData.full_name}
-                  onChange={(e) => updateField("full_name", e.target.value)}
-                  onFocus={() => setFocusedField("name")}
-                  onBlur={() => setFocusedField(null)}
-                  required
-                  placeholder=" "
-                  className="peer w-full pl-11 pr-4 pt-6 pb-2 rounded-xl bg-[var(--color-surface-200)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-transparent input-glow transition-all text-sm outline-none"
-                />
-                <label
-                  htmlFor="fullname-input"
-                  className={cn(
-                    "absolute left-11 top-1/2 -translate-y-1/2 text-sm text-[var(--color-text-muted)] transition-all duration-200 pointer-events-none font-display",
-                    (focusedField === "name" || formData.full_name) && "top-3.5 text-[10px] text-[var(--color-brand-400)] -translate-y-0"
-                  )}
-                >
-                  Full Name
-                </label>
-                <User className={cn(
-                  "absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 transition-colors duration-200",
-                  (focusedField === "name" || formData.full_name) ? "text-[var(--color-brand-400)]" : "text-[var(--color-text-muted)]"
-                )} />
-                {/* Underline glow */}
-                <div className={cn(
-                  "absolute bottom-0 inset-x-4 h-0.5 bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-accent-400)] scale-x-0 transition-transform duration-300",
-                  focusedField === "name" && "scale-x-100"
-                )} />
-              </div>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] font-display mb-1.5">
+                      Full name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Jane Doe"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      className="w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] px-4 py-3 text-sm outline-none transition focus:border-[var(--color-brand-500)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] font-display mb-1.5">
+                      Organization
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Optional"
+                      value={organization}
+                      onChange={(e) => setOrganization(e.target.value)}
+                      className="w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] px-4 py-3 text-sm outline-none transition focus:border-[var(--color-brand-500)]"
+                    />
+                  </div>
+                </div>
 
-              {/* Email Input */}
-              <div className="relative">
-                <input
-                  id="email-input"
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => updateField("email", e.target.value)}
-                  onFocus={() => setFocusedField("email")}
-                  onBlur={() => setFocusedField(null)}
-                  required
-                  placeholder=" "
-                  className="peer w-full pl-11 pr-4 pt-6 pb-2 rounded-xl bg-[var(--color-surface-200)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-transparent input-glow transition-all text-sm outline-none"
-                />
-                <label
-                  htmlFor="email-input"
-                  className={cn(
-                    "absolute left-11 top-1/2 -translate-y-1/2 text-sm text-[var(--color-text-muted)] transition-all duration-200 pointer-events-none font-display",
-                    (focusedField === "email" || formData.email) && "top-3.5 text-[10px] text-[var(--color-brand-400)] -translate-y-0"
-                  )}
-                >
-                  Email Address
-                </label>
-                <Mail className={cn(
-                  "absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 transition-colors duration-200",
-                  (focusedField === "email" || formData.email) ? "text-[var(--color-brand-400)]" : "text-[var(--color-text-muted)]"
-                )} />
-                {/* Underline glow */}
-                <div className={cn(
-                  "absolute bottom-0 inset-x-4 h-0.5 bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-accent-400)] scale-x-0 transition-transform duration-300",
-                  focusedField === "email" && "scale-x-100"
-                )} />
-              </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] font-display mb-1.5">
+                    Email address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="jane@company.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] px-4 py-3 text-sm outline-none transition focus:border-[var(--color-brand-500)]"
+                  />
+                </div>
 
-              {/* Password Input */}
-              <div className="relative">
-                <input
-                  id="password-input"
-                  type={showPassword ? "text" : "password"}
-                  value={formData.password}
-                  onChange={(e) => updateField("password", e.target.value)}
-                  onFocus={() => setFocusedField("password")}
-                  onBlur={() => setFocusedField(null)}
-                  required
-                  minLength={8}
-                  placeholder=" "
-                  className="peer w-full pl-11 pr-11 pt-6 pb-2 rounded-xl bg-[var(--color-surface-200)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-transparent input-glow transition-all text-sm outline-none"
-                />
-                <label
-                  htmlFor="password-input"
-                  className={cn(
-                    "absolute left-11 top-1/2 -translate-y-1/2 text-sm text-[var(--color-text-muted)] transition-all duration-200 pointer-events-none font-display",
-                    (focusedField === "password" || formData.password) && "top-3.5 text-[10px] text-[var(--color-brand-400)] -translate-y-0"
-                  )}
-                >
-                  Password
-                </label>
-                <Lock className={cn(
-                  "absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 transition-colors duration-200",
-                  (focusedField === "password" || formData.password) ? "text-[var(--color-brand-400)]" : "text-[var(--color-text-muted)]"
-                )} />
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] font-display mb-1.5">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Min. 8 characters"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] px-4 py-3 text-sm outline-none transition focus:border-[var(--color-brand-500)]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] font-display mb-1.5">
+                    Confirm password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="••••••••"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] px-4 py-3 text-sm outline-none transition focus:border-[var(--color-brand-500)]"
+                  />
+                </div>
+
                 <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
+                  type="submit"
+                  disabled={loading}
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--color-brand-600)] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[var(--color-brand-700)] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-                {/* Underline glow */}
-                <div className={cn(
-                  "absolute bottom-0 inset-x-4 h-0.5 bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-accent-400)] scale-x-0 transition-transform duration-300",
-                  focusedField === "password" && "scale-x-100"
-                )} />
-              </div>
-
-              {/* Organization Input */}
-              <div className="relative">
-                <input
-                  id="org-input"
-                  type="text"
-                  value={formData.organization}
-                  onChange={(e) => updateField("organization", e.target.value)}
-                  onFocus={() => setFocusedField("org")}
-                  onBlur={() => setFocusedField(null)}
-                  placeholder=" "
-                  className="peer w-full pl-11 pr-4 pt-6 pb-2 rounded-xl bg-[var(--color-surface-200)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-transparent input-glow transition-all text-sm outline-none"
-                />
-                <label
-                  htmlFor="org-input"
-                  className={cn(
-                    "absolute left-11 top-1/2 -translate-y-1/2 text-sm text-[var(--color-text-muted)] transition-all duration-200 pointer-events-none font-display",
-                    (focusedField === "org" || formData.organization) && "top-3.5 text-[10px] text-[var(--color-brand-400)] -translate-y-0"
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Creating account...
+                    </>
+                  ) : (
+                    <>
+                      Create Account
+                      <ArrowRight className="w-4 h-4" />
+                    </>
                   )}
-                >
-                  Organization (optional)
-                </label>
-                <Building2 className={cn(
-                  "absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 transition-colors duration-200",
-                  (focusedField === "org" || formData.organization) ? "text-[var(--color-brand-400)]" : "text-[var(--color-text-muted)]"
-                )} />
-                {/* Underline glow */}
-                <div className={cn(
-                  "absolute bottom-0 inset-x-4 h-0.5 bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-accent-400)] scale-x-0 transition-transform duration-300",
-                  focusedField === "org" && "scale-x-100"
-                )} />
+                </button>
+              </form>
+
+              <div className="text-center pt-2">
+                <p className="text-xs text-[var(--color-text-muted)] font-medium">
+                  Already have an account?{" "}
+                  <Link href="/login" className="text-[var(--color-brand-600)] font-semibold hover:underline">
+                    Sign in
+                  </Link>
+                </p>
               </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3.5 rounded-xl btn-primary btn-shimmer flex items-center justify-center gap-2 text-sm font-semibold disabled:opacity-50 mt-2 shadow-lg shadow-brand/20"
-              >
-                {loading ? (
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <> Create Account <ArrowRight className="w-4 h-4" /> </>
-                )}
-              </button>
-            </form>
-          </div>
-
-          <p className="text-center text-sm text-[var(--color-text-muted)] mt-6 font-display">
-            Already have an account?{" "}
-            <Link href="/login" className="text-[var(--color-brand-400)] hover:text-[var(--color-brand-300)] font-semibold transition-colors">Sign in</Link>
-          </p>
-        </motion.div>
-      </div>
-    </div>
+            </div>
+        </div>
+      </section>
+    </main>
   );
 }

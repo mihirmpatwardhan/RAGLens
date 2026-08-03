@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  FileText, Hash, Globe, Tag, Database, Compass,
+  FileText, Hash, Globe, Tag, Compass,
   ChevronRight, Copy, Terminal, AlignLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -16,12 +16,11 @@ interface ChunkInspectorProps {
 
 /* ── Matrix-rain style vector generator ── */
 function MatrixVectorDisplay() {
-  const [displayVals, setDisplayVals] = useState<number[]>([]);
+  const [displayVals, setDisplayVals] = useState<number[]>(() => 
+    Array.from({ length: 24 }, () => parseFloat((Math.random() * 2 - 1).toFixed(6)))
+  );
 
   useEffect(() => {
-    // Generate simulated coordinates
-    const initial = Array.from({ length: 24 }, () => parseFloat((Math.random() * 2 - 1).toFixed(6)));
-    setDisplayVals(initial);
 
     const interval = setInterval(() => {
       setDisplayVals(prev => 

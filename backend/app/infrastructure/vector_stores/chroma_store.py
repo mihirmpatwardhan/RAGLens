@@ -6,6 +6,7 @@ Uses a singleton client for connection pooling.
 """
 
 import logging
+
 from app.core.config import get_settings
 from app.infrastructure.vector_stores.base import VectorStoreAdapter
 
@@ -58,19 +59,25 @@ class ChromaVectorStoreAdapter(VectorStoreAdapter):
         metadatas: list[dict],
         documents: list[str],
     ) -> None:
+        import asyncio
+
         collection = self._get_collection(collection_name, create=True)
         if collection is not None:
             try:
-                collection.add(
-                    ids=ids,
-                    embeddings=embeddings,
-                    metadatas=metadatas,
-                    documents=documents,
-                )
-                logger.info(f"Added {len(ids)} embeddings to Chroma collection '{collection_name}'")
+                def _do_upsert():
+                    # Use upsert to handle re-ingestion of the same chunks gracefully
+                    collection.upsert(
+                        ids=ids,
+                        embeddings=embeddings,
+                        metadatas=metadatas,
+                        documents=documents,
+                    )
+
+                await asyncio.to_thread(_do_upsert)
+                logger.info(f"Upserted {len(ids)} embeddings to Chroma collection '{collection_name}'")
                 return
             except Exception as e:
-                logger.warning(f"ChromaDB add failed: {e}. Falling back to in-memory store.")
+                logger.warning(f"ChromaDB upsert failed: {e}. Falling back to in-memory store.")
 
         # Fallback to in-memory
         if collection_name not in self._in_memory_db:
@@ -89,14 +96,27 @@ class ChromaVectorStoreAdapter(VectorStoreAdapter):
         collection_name: str,
         query_embedding: list[float],
         top_k: int = 5,
+        filters: dict | None = None,  # Chroma filters accepted but not applied here
     ) -> list[dict]:
+        import asyncio
+
         collection = self._get_collection(collection_name, create=False)
         if collection is not None:
             try:
-                results = collection.query(
-                    query_embeddings=[query_embedding],
-                    n_results=top_k,
-                )
+                # Clamp n_results to the number of documents actually in the collection.
+                # ChromaDB raises InvalidArgumentError if n_results > collection count.
+                actual_count = collection.count()
+                if actual_count == 0:
+                    return []
+                safe_top_k = max(1, min(top_k, actual_count))
+
+                def _do_query():
+                    return collection.query(
+                        query_embeddings=[query_embedding],
+                        n_results=safe_top_k,
+                    )
+
+                results = await asyncio.to_thread(_do_query)
 
                 formatted_results = []
                 if results and "ids" in results and len(results["ids"]) > 0:
@@ -104,12 +124,14 @@ class ChromaVectorStoreAdapter(VectorStoreAdapter):
                         distance = results["distances"][0][idx] if "distances" in results else 0.0
                         # ChromaDB returns L2 distances; convert to similarity score (0-1)
                         score = max(0.0, 1.0 - (distance / 2.0))
-                        formatted_results.append({
-                            "id": item_id,
-                            "score": score,
-                            "metadata": results["metadatas"][0][idx] if "metadatas" in results else {},
-                            "document": results["documents"][0][idx] if "documents" in results else "",
-                        })
+                        formatted_results.append(
+                            {
+                                "id": item_id,
+                                "score": score,
+                                "metadata": results["metadatas"][0][idx] if "metadatas" in results else {},
+                                "document": results["documents"][0][idx] if "documents" in results else "",
+                            }
+                        )
                 return formatted_results
             except Exception as e:
                 logger.warning(f"ChromaDB search failed: {e}. Falling back to in-memory.")
@@ -135,7 +157,7 @@ class ChromaVectorStoreAdapter(VectorStoreAdapter):
         if collection is not None:
             try:
                 collection.delete(ids=ids)
-                logger.info(f"Deleted {len(ids)} vectors from Chroma collection '{collection_name}'")
+                logger.info(f"Deleted {len(ids)} vectors from '{collection_name}'")
                 return
             except Exception as e:
                 logger.warning(f"ChromaDB deletion failed: {e}.")
