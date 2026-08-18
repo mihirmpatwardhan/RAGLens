@@ -195,4 +195,23 @@ async def delete_knowledge_base(
             detail="Knowledge base not found",
         )
 
+    # Delete from vector DB before SQL commit
+    from app.infrastructure.vector_stores import get_vector_store
+    import logging
+    logger = logging.getLogger(__name__)
+    vector_store = get_vector_store()
+    
+    # Try deleting the dimension-specific collection
+    if kb.vector_dimension:
+        try:
+            await vector_store.delete_collection(f"kb_{kb_id}_dim{kb.vector_dimension}")
+        except Exception as e:
+            logger.warning(f"Failed to delete vector collection kb_{kb_id}_dim{kb.vector_dimension}: {e}")
+            
+    # Also try legacy dimension-less collection
+    try:
+        await vector_store.delete_collection(f"kb_{kb_id}")
+    except Exception:
+        pass
+
     await db.delete(kb)

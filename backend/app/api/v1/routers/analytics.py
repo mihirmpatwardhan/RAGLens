@@ -22,90 +22,91 @@ async def get_overview_metrics(
     db: DbSession,
 ):
     """Return real aggregate metrics for the signed-in user's workspace."""
-    kb_count, total_chunks, storage_used, kb_tokens = (
-        await db.execute(
-            select(
-                func.count(KnowledgeBase.id),
-                func.coalesce(func.sum(KnowledgeBase.chunk_count), 0),
-                func.coalesce(func.sum(KnowledgeBase.storage_bytes), 0),
-                func.coalesce(func.sum(KnowledgeBase.total_tokens), 0),
-            ).where(KnowledgeBase.owner_id == current_user.id)
-        )
-    ).one()
-
-    total_documents = (
-        await db.execute(
-            select(func.count(Document.id))
-            .select_from(Document)
-            .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
-            .where(KnowledgeBase.owner_id == current_user.id)
-        )
-    ).scalar_one()
-
-    total_conversations = (
-        await db.execute(
-            select(func.count(Conversation.id)).where(Conversation.user_id == current_user.id)
-        )
-    ).scalar_one()
-
-    total_messages = (
-        await db.execute(
-            select(func.count(Message.id))
-            .select_from(Message)
-            .join(Conversation, Message.conversation_id == Conversation.id)
-            .where(Conversation.user_id == current_user.id)
-        )
-    ).scalar_one()
-
-    assistant_count, avg_latency_ms, successful_answers, total_cost = (
-        await db.execute(
-            select(
-                func.count(Message.id),
-                func.coalesce(func.avg(Message.latency_ms), 0.0),
-                func.coalesce(
-                    func.sum(case((func.length(Message.content) > 0, 1), else_=0)),
-                    0,
-                ),
-                func.coalesce(func.sum(Message.cost), 0.0),
-            )
-            .select_from(Message)
-            .join(Conversation, Message.conversation_id == Conversation.id)
-            .where(
-                Conversation.user_id == current_user.id,
-                Message.role == "assistant",
-            )
-        )
-    ).one()
-
+    import asyncio
+    
     now = datetime.now(UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
-    queries_today = (
-        await db.execute(
-            select(func.count(Message.id))
-            .select_from(Message)
-            .join(Conversation, Message.conversation_id == Conversation.id)
-            .where(
-                Conversation.user_id == current_user.id,
-                Message.role == "user",
-                Message.created_at >= today_start,
-            )
-        )
-    ).scalar_one()
+    # Define tasks
+    t_kb = db.execute(
+        select(
+            func.count(KnowledgeBase.id),
+            func.coalesce(func.sum(KnowledgeBase.chunk_count), 0),
+            func.coalesce(func.sum(KnowledgeBase.storage_bytes), 0),
+            func.coalesce(func.sum(KnowledgeBase.total_tokens), 0),
+        ).where(KnowledgeBase.owner_id == current_user.id)
+    )
 
-    queries_this_week = (
-        await db.execute(
-            select(func.count(Message.id))
-            .select_from(Message)
-            .join(Conversation, Message.conversation_id == Conversation.id)
-            .where(
-                Conversation.user_id == current_user.id,
-                Message.role == "user",
-                Message.created_at >= week_start,
-            )
+    t_docs = db.execute(
+        select(func.count(Document.id))
+        .select_from(Document)
+        .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
+        .where(KnowledgeBase.owner_id == current_user.id)
+    )
+
+    t_convs = db.execute(
+        select(func.count(Conversation.id)).where(Conversation.user_id == current_user.id)
+    )
+
+    t_msgs = db.execute(
+        select(func.count(Message.id))
+        .select_from(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .where(Conversation.user_id == current_user.id)
+    )
+
+    t_assistant = db.execute(
+        select(
+            func.count(Message.id),
+            func.coalesce(func.avg(Message.latency_ms), 0.0),
+            func.coalesce(
+                func.sum(case((func.length(Message.content) > 0, 1), else_=0)),
+                0,
+            ),
+            func.coalesce(func.sum(Message.cost), 0.0),
         )
-    ).scalar_one()
+        .select_from(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .where(
+            Conversation.user_id == current_user.id,
+            Message.role == "assistant",
+        )
+    )
+
+    t_today = db.execute(
+        select(func.count(Message.id))
+        .select_from(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .where(
+            Conversation.user_id == current_user.id,
+            Message.role == "user",
+            Message.created_at >= today_start,
+        )
+    )
+
+    t_week = db.execute(
+        select(func.count(Message.id))
+        .select_from(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .where(
+            Conversation.user_id == current_user.id,
+            Message.role == "user",
+            Message.created_at >= week_start,
+        )
+    )
+
+    res_kb, res_docs, res_convs, res_msgs, res_assistant, res_today, res_week = await asyncio.gather(
+        t_kb, t_docs, t_convs, t_msgs, t_assistant, t_today, t_week
+    )
+
+    kb_count, total_chunks, storage_used, kb_tokens = res_kb.one()
+    total_documents = res_docs.scalar_one()
+    total_conversations = res_convs.scalar_one()
+    total_messages = res_msgs.scalar_one()
+    assistant_count, avg_latency_ms, successful_answers, total_cost = res_assistant.one()
+    queries_today = res_today.scalar_one()
+    queries_this_week = res_week.scalar_one()
 
     success_rate = (
         float(successful_answers) / float(assistant_count) if assistant_count else 1.0

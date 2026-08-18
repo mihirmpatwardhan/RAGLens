@@ -51,6 +51,9 @@ class IngestionPipeline:
         self._layout_elements: list = []
         # Audio/video transcript segments (populated for audio/video MIME types)
         self._audio_segments: list = []
+        # Images extracted from PDFs (list of {page, path, filename} dicts)
+        self._pdf_images: list[dict] = []
+
     async def execute(self) -> None:
         """Run the ingestion pipeline stages sequentially."""
         # 1. Fetch document
@@ -206,6 +209,9 @@ class IngestionPipeline:
                 text = await self._extract_pdf_layout(storage_path)
             elif mime == "application/pdf":
                 text = await self._extract_pdf(storage_path)
+                # Also extract embedded images from PDF in background (non-blocking)
+                storage_dir = storage_path.parent
+                self._pdf_images = self._extract_pdf_images(storage_path, storage_dir)
             elif mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
                 text = await self._extract_docx(storage_path)
             elif mime in ("text/plain", "text/markdown", "text/csv", "text/tab-separated-values",
@@ -268,9 +274,33 @@ class IngestionPipeline:
         Returns flat text as fallback for the stage result value.
         """
         try:
-            from app.infrastructure.ingestion.unstructured_parser import parse_pdf_layout
+            from app.infrastructure.ingestion.unstructured_parser import ParsedElement, parse_pdf_layout
             self._layout_elements = await parse_pdf_layout(path)
             if self._layout_elements:
+                page_texts = await self._extract_pdf_pages(path)
+                text_pages = {
+                    element.page_number
+                    for element in self._layout_elements
+                    if element.content_type in {"text", "table", "title"}
+                    and len(element.text.strip()) >= settings.PDF_TEXT_MIN_CHARS_PER_PAGE
+                }
+                supplemental_pages = 0
+                for page_number, page_text in page_texts.items():
+                    if page_number not in text_pages and page_text:
+                        self._layout_elements.append(
+                            ParsedElement(
+                                content_type="text",
+                                text=page_text,
+                                page_number=page_number,
+                            )
+                        )
+                        supplemental_pages += 1
+                if supplemental_pages:
+                    logger.info(
+                        "Added OCR/text fallback for %d layout-parsed pages from '%s'",
+                        supplemental_pages,
+                        path.name,
+                    )
                 # Return joined text so stage tracking shows character count
                 return " ".join(el.text for el in self._layout_elements if el.text)
         except Exception as exc:
@@ -280,30 +310,194 @@ class IngestionPipeline:
         # Fallback to flat pymupdf extraction
         return await self._extract_pdf(path)
 
+    def _extract_pdf_images(self, path: Path, storage_dir: Path) -> list[dict]:
+        """Extract embedded images from a PDF using pymupdf and save them to storage.
+
+        Returns a list of image info dicts: [{page, path, width, height}, ...]
+        Images are saved as PNG files alongside the document.
+        """
+        try:
+            import fitz
+            image_infos: list[dict] = []
+            doc = fitz.open(str(path))
+            img_dir = storage_dir / "images"
+            img_dir.mkdir(parents=True, exist_ok=True)
+
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                image_list = page.get_images(full=True)
+                for img_idx, img in enumerate(image_list):
+                    xref = img[0]
+                    try:
+                        base_image = doc.extract_image(xref)
+                        img_bytes = base_image["image"]
+                        ext = base_image.get("ext", "png")
+                        # Skip very small images (icons, decorations)
+                        if len(img_bytes) < 5000:
+                            continue
+                        img_filename = f"page{page_num + 1}_img{img_idx}.{ext}"
+                        img_path = img_dir / img_filename
+                        img_path.write_bytes(img_bytes)
+                        image_infos.append({
+                            "page": page_num + 1,
+                            "path": str(img_path),
+                            "filename": img_filename,
+                            "size_bytes": len(img_bytes),
+                        })
+                    except Exception as img_exc:
+                        logger.debug("Could not extract image xref=%d: %s", xref, img_exc)
+            doc.close()
+            if image_infos:
+                logger.info(
+                    "Extracted %d images from '%s' to %s",
+                    len(image_infos), path.name, img_dir,
+                )
+            return image_infos
+        except Exception as exc:
+            logger.debug("Image extraction skipped: %s", exc)
+            return []
+
     async def _extract_pdf(self, path: Path) -> str:
-        """Extract text from PDF using pymupdf (fitz)."""
+        """Extract text from PDF using pymupdf (fitz), page-by-page with memory management."""
+        return "\n\n".join((await self._extract_pdf_pages(path)).values())
+
         import fitz  # pymupdf
         text_parts = []
+        BATCH_SIZE = 20  # Process in batches of 20 pages to limit peak memory
+
         doc = fitz.open(str(path))
-        for _page_num, page in enumerate(doc):
+        total_pages = len(doc)
+        logger.info("Extracting PDF: %d pages from '%s'", total_pages, path.name)
+
+        for page_num in range(total_pages):
+            page = doc[page_num]
             page_text = page.get_text("text")
             if page_text.strip():
                 text_parts.append(page_text)
+
+            # Yield control every BATCH_SIZE pages to avoid blocking event loop
+            if (page_num + 1) % BATCH_SIZE == 0:
+                logger.debug("PDF extraction progress: %d/%d pages", page_num + 1, total_pages)
+
         doc.close()
 
         if not text_parts:
             # Fallback to pdfplumber for scanned PDFs
             try:
                 import pdfplumber
+                logger.info("Trying pdfplumber for '%s'", path.name)
                 with pdfplumber.open(str(path)) as pdf:
                     for page in pdf.pages:
                         page_text = page.extract_text() or ""
                         if page_text.strip():
                             text_parts.append(page_text)
             except Exception as e:
-                logger.warning(f"pdfplumber fallback also failed: {e}")
+                logger.warning("pdfplumber fallback also failed: %s", e)
+
+        if not text_parts:
+            # Final fallback: OCR using EasyOCR for fully scanned/image-based PDFs
+            # Process in small batches to avoid memory exhaustion on large files
+            try:
+                import easyocr
+                import fitz
+                logger.info("Falling back to EasyOCR for scanned PDF: '%s'", path.name)
+                # Suppress verbose easyocr logs
+                reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+                doc = fitz.open(str(path))
+                total_pages = len(doc)
+                MAX_OCR_PAGES = 50  # Safety limit — OCR is very slow
+                if total_pages > MAX_OCR_PAGES:
+                    logger.warning(
+                        "PDF has %d pages — OCR limited to first %d pages to avoid timeout.",
+                        total_pages, MAX_OCR_PAGES,
+                    )
+                for page_idx in range(min(total_pages, MAX_OCR_PAGES)):
+                    page = doc[page_idx]
+                    # Render at 150 DPI — balance quality vs memory
+                    pix = page.get_pixmap(dpi=150)
+                    img_bytes = pix.tobytes("png")
+                    pix = None  # Free immediately
+                    result = reader.readtext(img_bytes, detail=0)
+                    if result:
+                        text_parts.append(" ".join(result))
+                doc.close()
+            except Exception as e:
+                logger.warning("EasyOCR fallback failed: %s", e)
 
         return "\n\n".join(text_parts)
+
+    async def _extract_pdf_pages(self, path: Path) -> dict[int, str]:
+        """Return text by page, applying OCR only to pages with sparse native text."""
+        import fitz
+
+        document = fitz.open(str(path))
+        try:
+            page_texts = {
+                page_number: document[page_number - 1].get_text("text").strip()
+                for page_number in range(1, len(document) + 1)
+            }
+        finally:
+            document.close()
+
+        sparse_pages = [
+            page_number
+            for page_number, text in page_texts.items()
+            if len(text) < settings.PDF_TEXT_MIN_CHARS_PER_PAGE
+        ]
+        logger.info(
+            "Extracted native text from %d/%d PDF pages in '%s'",
+            len(page_texts) - len(sparse_pages),
+            len(page_texts),
+            path.name,
+        )
+        if not sparse_pages:
+            return page_texts
+
+        try:
+            import pdfplumber
+
+            with pdfplumber.open(str(path)) as pdf:
+                for page_number in sparse_pages[:]:
+                    extracted = (pdf.pages[page_number - 1].extract_text() or "").strip()
+                    if len(extracted) >= settings.PDF_TEXT_MIN_CHARS_PER_PAGE:
+                        page_texts[page_number] = extracted
+                        sparse_pages.remove(page_number)
+        except Exception as exc:
+            logger.warning("pdfplumber fallback failed for '%s': %s", path.name, exc)
+
+        if not sparse_pages:
+            return page_texts
+
+        max_ocr_pages = settings.PDF_MAX_OCR_PAGES
+        pages_to_ocr = sparse_pages if max_ocr_pages <= 0 else sparse_pages[:max_ocr_pages]
+        if len(pages_to_ocr) < len(sparse_pages):
+            logger.warning(
+                "OCR cap reached for '%s': processing %d of %d sparse pages.",
+                path.name,
+                len(pages_to_ocr),
+                len(sparse_pages),
+            )
+        try:
+            import easyocr
+
+            logger.info("Running OCR on %d scanned pages from '%s'", len(pages_to_ocr), path.name)
+            reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+            document = fitz.open(str(path))
+            try:
+                for page_number in pages_to_ocr:
+                    pixmap = document[page_number - 1].get_pixmap(dpi=settings.PDF_OCR_DPI)
+                    try:
+                        text = " ".join(reader.readtext(pixmap.tobytes("png"), detail=0)).strip()
+                    finally:
+                        pixmap = None
+                    if text:
+                        page_texts[page_number] = text
+            finally:
+                document.close()
+        except Exception as exc:
+            logger.warning("OCR fallback failed for '%s': %s", path.name, exc)
+
+        return page_texts
 
     async def _extract_docx(self, path: Path) -> str:
         """Extract text from DOCX files."""
@@ -431,11 +625,8 @@ class IngestionPipeline:
         self, doc: Document, chunks: list[dict], embeddings: list[list[float]]
     ) -> None:
         """Store chunks and embeddings in both the DB and the vector store."""
-        collection_name = f"kb_{doc.knowledge_base_id}"
-
-        # ── Dimension safety guard ──────────────────────────────────────────────
-        # Determine which model and dimension are active from the embedding provider.
         active_dim: int = self.embedding_provider.active_dim
+        collection_name = f"kb_{doc.knowledge_base_id}_dim{active_dim}"
         active_model: str = (
             settings.DEFAULT_EMBEDDING_MODEL
             if active_dim == settings.DEFAULT_EMBEDDING_DIMENSION
@@ -463,13 +654,21 @@ class IngestionPipeline:
             chunk_id = uuid.UUID(chunk_id_str) if isinstance(chunk_id_str, str) else chunk_id_str
 
             chunk_ids.append(str(chunk_id))
+            chunk_page = chunk.get("page_number", 1)
+            # Find images on the same page as this chunk for inline citation display
+            page_images = [
+                img["path"]
+                for img in self._pdf_images
+                if img.get("page") == chunk_page
+            ]
             metadatas.append({
                 "document_id": str(doc.id),
                 "filename": doc.original_filename,
                 "chunk_index": chunk.get("index", idx),
-                "page_number": chunk.get("page_number", 1),
+                "page_number": chunk_page,
                 "content_type": chunk.get("content_type", "text"),
                 "section_title": chunk.get("section_title") or "",
+                "image_paths": ",".join(page_images) if page_images else "",
             })
             documents_text.append(chunk["text"])
 

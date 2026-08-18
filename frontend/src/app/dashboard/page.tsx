@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useAppAuth, useAppUser } from "@/hooks/use-auth";
 import { Bot, Database, FileUp, Loader2, MessageSquareText, Send, Zap } from "lucide-react";
@@ -9,7 +9,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import toast from "react-hot-toast";
 import { PipelineInspector } from "@/components/chat/pipeline-inspector";
-import { apiClient, getErrorMessage } from "@/lib/api-client";
+import { apiClient, getErrorMessage, getStreamingApiUrl } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { useThemeStore } from "@/stores/theme-store";
 import { useSearchParams, useRouter } from "next/navigation";
@@ -20,9 +20,11 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   trace?: RetrievalTrace | null;
+  image_paths?: string[];
+  streamingStatus?: boolean;
 };
 
-export default function ChatPage() {
+function ChatPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const chatId = searchParams?.get("chat");
@@ -60,6 +62,7 @@ export default function ChatPage() {
     setTimeout(() => {
       void loadKnowledgeBases();
     }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -138,7 +141,7 @@ export default function ChatPage() {
     try {
       const activeConversationId = await ensureConversation(prompt);
       const token = await getToken();
-      const response = await fetch(`/api/v1/chat/conversations/${activeConversationId}/messages`, {
+      const response = await fetch(getStreamingApiUrl(`/chat/conversations/${activeConversationId}/messages`), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -167,16 +170,46 @@ export default function ChatPage() {
         buffer = chunks.pop() || "";
 
         for (const chunk of chunks) {
+          // Skip SSE keepalive comment lines (e.g. ": keepalive")
+          if (chunk.trim().startsWith(":")) continue;
+
           const eventName = chunk.match(/^event:\s*(.+)$/m)?.[1];
           const dataLine = chunk.match(/^data:\s*(.*)$/m)?.[1] || "{}";
-          const payload = JSON.parse(dataLine);
+
+          let payload: Record<string, unknown>;
+          try {
+            payload = JSON.parse(dataLine);
+          } catch {
+            continue; // skip malformed lines
+          }
 
           if (eventName === "trace") {
-            setSelectedTrace(payload);
+            setSelectedTrace(payload as unknown as RetrievalTrace);
             setRightPanelOpen(true);
+            // Extract any image paths from citations in trace
+            const traceCitations = (payload as Record<string, unknown[]>).citations ?? [];
+            const allImages = traceCitations.flatMap(
+              (c: unknown) => (c as { image_paths?: string[] }).image_paths ?? []
+            );
             setMessages((current) =>
               current.map((message) =>
-                message.id === assistantId ? { ...message, trace: payload } : message
+                message.id === assistantId
+                  ? { ...message, trace: payload as unknown as RetrievalTrace, image_paths: allImages }
+                  : message
+              )
+            );
+          }
+
+          if (eventName === "status") {
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === assistantId
+                  ? {
+                      ...message,
+                      content: (payload as { message?: string }).message ?? "Preparing your answer...",
+                      streamingStatus: true,
+                    }
+                  : message
               )
             );
           }
@@ -185,7 +218,13 @@ export default function ChatPage() {
             setMessages((current) =>
               current.map((message) =>
                 message.id === assistantId
-                  ? { ...message, content: `${message.content}${payload.token}` }
+                  ? {
+                      ...message,
+                      content: message.streamingStatus
+                        ? (payload as { token?: string }).token ?? ""
+                        : `${message.content}${(payload as { token?: string }).token ?? ""}`,
+                      streamingStatus: false,
+                    }
                   : message
               )
             );
@@ -317,6 +356,29 @@ export default function ChatPage() {
                         <p className="whitespace-pre-wrap text-sm leading-7">{message.content}</p>
                       )}
 
+                      {/* Inline images from citations */}
+                      {message.role === "assistant" && message.image_paths && message.image_paths.length > 0 ? (
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          {message.image_paths.slice(0, 4).map((imgPath, imgIdx) => (
+                            <a
+                              key={imgIdx}
+                              href={`/api/v1/documents/image?path=${encodeURIComponent(imgPath)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] hover:opacity-90 transition"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={`/api/v1/documents/image?path=${encodeURIComponent(imgPath)}`}
+                                alt={`Image from document (page image ${imgIdx + 1})`}
+                                className="h-32 w-full object-cover"
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                              />
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
+
                       {message.role === "assistant" && message.trace ? (
                         <div className="mt-4 border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-text-muted)]">
                           {message.trace.total_latency_ms}ms · {message.trace.retrieved_chunks.length} sources used
@@ -422,5 +484,17 @@ export default function ChatPage() {
         ) : null}
       </AnimatePresence>
     </div>
+  );
+}
+// Wrap in Suspense because useSearchParams() requires it in Next.js App Router
+export default function ChatPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex h-full items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-[var(--color-brand-600)]" />
+      </div>
+    }>
+      <ChatPageInner />
+    </Suspense>
   );
 }

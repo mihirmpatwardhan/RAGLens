@@ -21,6 +21,10 @@ _model: object | None = None
 _model_name: str | None = None
 _load_error: str | None = None
 
+# CrossEncoderReranker singleton — one instance per process
+_reranker_instance: "CrossEncoderReranker | None" = None
+_reranker_model_name: str | None = None
+
 
 def _get_or_load_model(model_name: str):
     """Load (or return cached) CrossEncoder model synchronously.
@@ -134,3 +138,20 @@ class CrossEncoderReranker:
                 reverse=True,
             )
             return fallback[:top_n], False
+
+
+def get_reranker(model_name: str | None = None) -> "CrossEncoderReranker":
+    """Return a process-lifetime CrossEncoderReranker singleton.
+
+    The underlying CrossEncoder model is already module-level cached inside
+    _get_or_load_model(). This factory additionally avoids re-instantiating
+    the Python wrapper class on every request.
+    """
+    global _reranker_instance, _reranker_model_name
+    from app.core.config import get_settings
+
+    effective_name = model_name or get_settings().RERANKER_MODEL
+    if _reranker_instance is None or _reranker_model_name != effective_name:
+        _reranker_instance = CrossEncoderReranker(effective_name)
+        _reranker_model_name = effective_name
+    return _reranker_instance

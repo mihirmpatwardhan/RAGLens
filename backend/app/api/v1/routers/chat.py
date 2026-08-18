@@ -13,7 +13,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
@@ -71,17 +71,62 @@ async def create_conversation(
 async def list_conversations(
     current_user: CurrentUser,
     db: DbSession,
+    kb_id: uuid.UUID | None = Query(None, description="Filter conversations by Knowledge Base ID"),
 ):
-    result = await db.execute(
-        select(Conversation)
-        .where(
-            Conversation.user_id == current_user.id,
-            Conversation.is_archived == False,  # noqa: E712
-        )
-        .order_by(Conversation.updated_at.desc())
+    stmt = select(Conversation).where(
+        Conversation.user_id == current_user.id,
+        Conversation.is_archived == False,  # noqa: E712
     )
+    if kb_id:
+        stmt = stmt.where(Conversation.knowledge_base_id == kb_id)
+        
+    result = await db.execute(stmt.order_by(Conversation.updated_at.desc()))
     convs = result.scalars().all()
     return [ConversationResponse.model_validate(c) for c in convs]
+
+@router.get("/conversations/grouped")
+async def list_conversations_grouped(current_user: CurrentUser, db: DbSession):
+    """Returns conversations grouped by Knowledge Base ID for hierarchical sidebar rendering."""
+    from app.infrastructure.db.models.knowledge import KnowledgeBase
+    
+    stmt = select(Conversation).where(
+        Conversation.user_id == current_user.id,
+        Conversation.is_archived == False,
+    ).order_by(Conversation.updated_at.desc())
+    convs_result = await db.execute(stmt)
+    convs = convs_result.scalars().all()
+    
+    kb_ids = [c.knowledge_base_id for c in convs if c.knowledge_base_id]
+    kbs = {}
+    if kb_ids:
+        kb_stmt = select(KnowledgeBase).where(KnowledgeBase.id.in_(kb_ids))
+        kbs_result = await db.execute(kb_stmt)
+        kbs = {kb.id: kb for kb in kbs_result.scalars().all()}
+        
+    workspaces_map = {}
+    global_convs = []
+    
+    for c in convs:
+        c_resp = ConversationResponse.model_validate(c).model_dump(mode="json")
+        if c.knowledge_base_id:
+            kb_id_str = str(c.knowledge_base_id)
+            if kb_id_str not in workspaces_map:
+                kb_obj = kbs.get(c.knowledge_base_id)
+                workspaces_map[kb_id_str] = {
+                    "id": kb_id_str,
+                    "name": kb_obj.name if kb_obj else "Unknown Workspace",
+                    "color": kb_obj.color if kb_obj and hasattr(kb_obj, "color") else "blue",
+                    "icon": kb_obj.icon if kb_obj and hasattr(kb_obj, "icon") else "folder",
+                    "conversations": []
+                }
+            workspaces_map[kb_id_str]["conversations"].append(c_resp)
+        else:
+            global_convs.append(c_resp)
+            
+    return {
+        "workspaces": list(workspaces_map.values()),
+        "global": global_convs
+    }
 
 
 @router.get(
@@ -115,6 +160,7 @@ async def get_messages(
 
 @router.post(
     "/conversations/{conv_id}/messages",
+    response_class=StreamingResponse,
     summary="Send a message and stream the response",
 )
 async def send_message(
@@ -140,7 +186,20 @@ async def send_message(
         if role is None:
             raise HTTPException(status_code=403, detail="Not authorized to access this knowledge base")
 
-    # 2. Save user message
+    # 2. Load conversation history BEFORE saving current message (last 10 msgs = 5 turns)
+    history_result = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conv_id)
+        .order_by(Message.created_at.asc())
+        .limit(10)
+    )
+    prior_messages = history_result.scalars().all()
+    conversation_history = [
+        {"role": m.role, "content": m.content}
+        for m in prior_messages
+    ]
+
+    # 3. Save user message
     user_msg = Message(
         conversation_id=conv_id,
         role="user",
@@ -150,18 +209,45 @@ async def send_message(
     conv.message_count += 1
     await db.commit()
 
-    # 3. Run retrieval pipeline (embeddings + vector search + reranking)
-    #    This is done BEFORE streaming so we can emit the full trace event first.
+    # 4. Prepare retrieval pipeline
     pipeline = RetrievalPipeline(db, request.knowledge_base_id or conv.knowledge_base_id)
-    retrieval_res = await pipeline.retrieve_and_generate_context(request.content)
 
-    # 4. True SSE streaming generator with LiteLLM token-by-token streaming
+    # 5. True SSE streaming generator with LiteLLM token-by-token streaming
     async def sse_generator() -> AsyncGenerator[str, None]:
         start_time = time.time()
         accumulated_text = ""
         token_count = 0
+        last_keepalive = time.time()
 
-        # Emit trace first so the pipeline inspector shows immediately
+        yield 'event: status\ndata: {"message": "Searching your workspace..."}\n\n'
+        try:
+            retrieval_res = await pipeline.retrieve_and_generate_context(
+                request.content,
+                conversation_history=conversation_history,
+            )
+        except Exception as retrieval_exc:
+            logger.exception("Retrieval pipeline failed: %s", retrieval_exc)
+            empty_trace = {
+                "query_original": request.content,
+                "query_rewritten": request.content,
+                "retrieved_chunks": [],
+                "reranked_chunks": [],
+                "prompt_tokens": 0,
+                "total_latency_ms": 0,
+                "stages": {},
+            }
+            retrieval_res = {
+                "trace": empty_trace,
+                "user_prompt": (
+                    f"The user asked: {request.content}\n\n"
+                    f"No documents could be retrieved due to an error: {retrieval_exc}. "
+                    "Inform the user of the error and ask them to try again."
+                ),
+                "history_messages": conversation_history,
+                "citations": [],
+            }
+
+        # Emit trace once retrieval has completed so the inspector has full data.
         yield f"event: trace\ndata: {json.dumps(retrieval_res['trace'])}\n\n"
 
         try:
@@ -172,6 +258,23 @@ async def send_message(
 
             user_prompt = retrieval_res["user_prompt"]
 
+            # Build full multi-turn messages for the LLM:
+            # [system] + [prior history] + [current user RAG prompt]
+            # This gives the LLM the full conversation context for accurate follow-ups.
+            history_msgs = retrieval_res.get("history_messages", [])
+            llm_messages = [{"role": "system", "content": _RAG_SYSTEM_PROMPT}]
+            # Inject prior turns (without the last user message since it's in user_prompt)
+            for h_msg in history_msgs:
+                llm_messages.append({"role": h_msg["role"], "content": h_msg["content"]})
+            # Add the RAG-grounded current user message
+            llm_messages.append({"role": "user", "content": user_prompt})
+
+            logger.info(
+                "LLM messages: %d prior history turns + RAG user prompt (%d chars)",
+                len(history_msgs),
+                len(user_prompt),
+            )
+
             # Try each provider in the fallback chain with real streaming
             streamed = False
             errors = []
@@ -179,23 +282,29 @@ async def send_message(
                 api_key = _get_api_key_for_provider(provider, settings)
                 if not api_key:
                     errors.append(f"{provider}: no API key")
+                    logger.debug("Skipping provider '%s': no API key configured.", provider)
                     continue
 
-                # Use the configured model override for google/openai
-                if provider == "google":
-                    model_string = "gemini/gemini-2.0-flash"
-                elif provider == "openai":
-                    model_string = settings.DEFAULT_LLM_MODEL if "/" not in settings.DEFAULT_LLM_MODEL else "gpt-4o"
+                # Build the correct model string:
+                # If DEFAULT_LLM_MODEL already has a provider prefix (e.g. "openrouter/..."),
+                # use it directly for that provider; otherwise use the helper.
+                default_model = settings.DEFAULT_LLM_MODEL
+                if provider == "openai" and "/" not in default_model:
+                    # Plain model name like "gpt-4o-mini" — use directly
+                    model_string = default_model
+                elif default_model.startswith(f"{provider}/"):
+                    # e.g. "openrouter/meta-llama/..." for openrouter provider
+                    model_string = default_model
                 else:
-                    model_string = _build_model_string(provider, settings.DEFAULT_LLM_MODEL)
+                    # Use the fallback model map for this provider
+                    model_string = _build_model_string(provider, default_model)
+
+                logger.info("Attempting SSE stream via provider=%s model=%s", provider, model_string)
 
                 try:
                     stream = await litellm.acompletion(
                         model=model_string,
-                        messages=[
-                            {"role": "system", "content": _RAG_SYSTEM_PROMPT},
-                            {"role": "user", "content": user_prompt},
-                        ],
+                        messages=llm_messages,
                         temperature=settings.DEFAULT_TEMPERATURE,
                         max_tokens=settings.DEFAULT_MAX_TOKENS,
                         api_key=api_key,
@@ -210,9 +319,16 @@ async def send_message(
                             token_count += 1
                             yield f"event: token\ndata: {json.dumps({'token': delta})}\n\n"
 
+                        # Send SSE keepalive comment every 10s to prevent proxy buffering
+                        now = time.time()
+                        if now - last_keepalive > 10:
+                            yield ": keepalive\n\n"
+                            last_keepalive = now
+
                     streamed = True
-                    logger.info("Streaming completed via %s (%d tokens)", provider, token_count)
+                    logger.info("Streaming completed via %s model=%s (%d tokens)", provider, model_string, token_count)
                     break
+
 
                 except Exception as exc:
                     err_msg = f"{provider}: {exc}"
@@ -244,33 +360,40 @@ async def send_message(
         trace = retrieval_res["trace"]
         trace["total_latency_ms"] = trace.get("total_latency_ms", 0) + total_latency_ms
 
-        try:
-            from app.infrastructure.db.base import async_session_factory
-            async with async_session_factory() as generator_db:
-                assistant_msg = Message(
-                    conversation_id=conv_id,
-                    role="assistant",
-                    content=accumulated_text,
-                    model=conv.model,
-                    tokens_prompt=trace.get("prompt_tokens", 0),
-                    tokens_completion=token_count,
-                    cost=0,
-                    latency_ms=trace["total_latency_ms"],
-                    pipeline_trace=trace,
-                    citations=retrieval_res["citations"],
-                    retrieved_chunks=trace.get("retrieved_chunks", []),
-                )
-                generator_db.add(assistant_msg)
+        async def _save_db():
+            try:
+                from app.infrastructure.db.base import async_session_factory
+                async with async_session_factory() as generator_db:
+                    assistant_msg = Message(
+                        conversation_id=conv_id,
+                        role="assistant",
+                        content=accumulated_text,
+                        model=conv.model,
+                        tokens_prompt=trace.get("prompt_tokens", 0),
+                        tokens_completion=token_count,
+                        cost=0,
+                        latency_ms=trace["total_latency_ms"],
+                        pipeline_trace=trace,
+                        citations=retrieval_res["citations"],
+                        retrieved_chunks=trace.get("retrieved_chunks", []),
+                    )
+                    generator_db.add(assistant_msg)
 
-                generator_conv_result = await generator_db.execute(
-                    select(Conversation).where(Conversation.id == conv_id)
-                )
-                generator_conv = generator_conv_result.scalar_one()
-                generator_conv.message_count += 1
-                generator_conv.updated_at = datetime.now(UTC)
-                await generator_db.commit()
-        except Exception as db_exc:
-            logger.error("Failed to persist assistant message: %s", db_exc)
+                    generator_conv_result = await generator_db.execute(
+                        select(Conversation).where(Conversation.id == conv_id)
+                    )
+                    generator_conv = generator_conv_result.scalar_one()
+                    generator_conv.message_count += 1
+                    generator_conv.updated_at = datetime.now(UTC)
+                    await generator_db.commit()
+            except Exception as db_exc:
+                logger.error("Failed to persist assistant message: %s", db_exc)
+
+        import asyncio
+        # create_task schedules the DB save as a background task — runs after
+        # SSE stream ends without blocking the generator or leaking coroutines.
+        asyncio.create_task(_save_db())
+
 
         yield "event: done\ndata: {}\n\n"
 
@@ -278,7 +401,9 @@ async def send_message(
         sse_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # Disable nginx buffering for true streaming
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",   # Disable nginx/proxy buffering for true streaming
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked",
         },
     )

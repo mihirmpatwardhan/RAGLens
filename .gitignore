@@ -47,22 +47,54 @@ out/
 Thumbs.db
 
 # ──────────────────────────────────────────────
-# Environment & Secrets
+# Environment & Secrets — NEVER commit these
 # ──────────────────────────────────────────────
 .env
 .env.local
 .env.*.local
 *.pem
 *.key
+secrets/
 
 # ──────────────────────────────────────────────
-# Project Data (generated at runtime)
+# Database files (generated at runtime)
 # ──────────────────────────────────────────────
 *.db
+*.sqlite
 *.sqlite3
+# SQLite WAL-mode journal files (these contain live user data)
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
+
+# ──────────────────────────────────────────────
+# Vector store data (user data — never commit)
+# ──────────────────────────────────────────────
 chroma_data/
+qdrant_data/
+faiss_index/
 storage/
+uploads/
+
+# ──────────────────────────────────────────────
+# Logs
+# ──────────────────────────────────────────────
 logs/
+*.log
+
+# ──────────────────────────────────────────────
+# Test & scratch files — not for production
+# ──────────────────────────────────────────────
+backend/test_*.py
+backend/reset_*.py
+backend/test_*.pdf
+scripts/generate_*.py
+scratch/
+
+# PDF reports & summaries (auto-generated)
+RAGLens_Updates_Summary.pdf
+*.pdf
 
 # ──────────────────────────────────────────────
 # Docker

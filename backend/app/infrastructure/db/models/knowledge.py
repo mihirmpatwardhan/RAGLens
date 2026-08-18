@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    Index,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -81,6 +82,9 @@ class Document(Base):
     """A document stored within a knowledge base."""
 
     __tablename__ = "documents"
+    __table_args__ = (
+        Index("ix_documents_kb", "knowledge_base_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     knowledge_base_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False)
@@ -255,6 +259,9 @@ class Conversation(Base):
     """A chat conversation associated with knowledge bases."""
 
     __tablename__ = "conversations"
+    __table_args__ = (
+        Index("ix_conversations_user_kb", "user_id", "knowledge_base_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -348,6 +355,9 @@ class PromptTemplate(Base):
     """
 
     __tablename__ = "prompt_templates"
+    __table_args__ = (
+        Index("ix_prompt_templates_owner_kb", "owner_id", "knowledge_base_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     owner_id: Mapped[uuid.UUID] = mapped_column(

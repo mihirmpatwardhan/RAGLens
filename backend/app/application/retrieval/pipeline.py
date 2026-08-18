@@ -13,29 +13,38 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.infrastructure.embeddings.fallback_embeddings import FallbackEmbeddingProvider
-from app.infrastructure.llm import FallbackLLMProvider
-from app.infrastructure.reranking import CrossEncoderReranker
+from app.infrastructure.embeddings.fallback_embeddings import get_embedding_provider
+from app.infrastructure.llm import get_llm_provider
+from app.infrastructure.reranking import get_reranker
 from app.infrastructure.vector_stores import get_vector_store
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-_RAG_SYSTEM_PROMPT = """You are a helpful AI assistant answering questions based on the provided context from the user's knowledge base.
+_RAG_SYSTEM_PROMPT = """You are RAGLens, a precise AI assistant that answers questions **strictly based on retrieved documents** from the user's knowledge base.
 
-Instructions:
-- Answer the question using only the provided context.
-- If the context is insufficient, say so clearly.
-- Cite the document name when possible.
-- Use markdown for structure when it helps.
-- Be concise but complete."""
+## Core Rules
+1. **Only use provided context.** Never invent facts, names, numbers, or dates not in the context.
+2. **Always cite your sources.** Mention the document name for each key claim (e.g., "According to [filename]...").
+3. **Be direct and structured.** Use markdown headers, bullets, and bold text to organize complex answers.
+4. **Acknowledge gaps honestly.** If the context does not fully answer the question, say exactly what is missing — do not guess.
+5. **Maintain conversation continuity.** Use prior messages to resolve follow-up questions and pronouns.
+6. **Never pad your response.** Skip filler phrases like "Great question!" or "Certainly!".
+7. **Prioritize accuracy.** For numbers, dates, and names — quote directly from the document chunk."""
 
-_RAG_USER_TEMPLATE = """Context:
+_RAG_USER_TEMPLATE = """## Retrieved Document Context
 {context}
 
-Question: {question}
+---
 
-Answer based on the context above:"""
+## Conversation History
+{history}
+
+## Current Question
+{question}
+
+## Your Task
+Answer the current question using ONLY the retrieved context above. Cite the source document for each key fact. If the context is insufficient, explicitly state what information is missing and suggest the user upload relevant documents."""
 
 
 class RetrievalPipeline:
@@ -44,8 +53,8 @@ class RetrievalPipeline:
     def __init__(self, db: AsyncSession, kb_id: uuid.UUID | None = None):
         self.db = db
         self.kb_id = kb_id
-        # Use FallbackEmbeddingProvider (consistent with ingestion pipeline)
-        self.embedding_provider = FallbackEmbeddingProvider()
+        # Use process-lifetime singletons — avoids re-creating clients/models per request.
+        self.embedding_provider = get_embedding_provider()
         # get_vector_store() reads VECTOR_DB_PROVIDER — qdrant by default.
         self.vector_store = get_vector_store()
 
@@ -88,7 +97,8 @@ class RetrievalPipeline:
 
         search_start = time.time()
         query_vector = await self.embedding_provider.embed_query(rewritten_query)
-        collection_name = f"kb_{self.kb_id}" if self.kb_id else settings.CHROMA_COLLECTION_NAME
+        active_dim = self.embedding_provider.active_dim
+        collection_name = f"kb_{self.kb_id}_dim{active_dim}" if self.kb_id else settings.CHROMA_COLLECTION_NAME
 
         # ── Dimension safety guard ──────────────────────────────────────────────
         # Only enforce when searching a specific KB (self.kb_id is set).
@@ -132,6 +142,10 @@ class RetrievalPipeline:
                 "score": round(result["score"], 4),
                 "document_name": result["metadata"].get("filename", "document"),
                 "page_number": result["metadata"].get("page_number", 1),
+                "image_paths": [
+                    p for p in result["metadata"].get("image_paths", "").split(",")
+                    if p.strip()
+                ],
             }
             for result in search_results
         ]
@@ -140,7 +154,7 @@ class RetrievalPipeline:
         rerank_start = time.time()
 
         if settings.ENABLE_RERANKING:
-            reranker = CrossEncoderReranker(settings.RERANKER_MODEL)
+            reranker = get_reranker(settings.RERANKER_MODEL)
             reranked, used_reranker = await reranker.rerank(
                 query=rewritten_query,
                 chunks=retrieved,
@@ -169,13 +183,21 @@ class RetrievalPipeline:
         }
 
         prompt_start = time.time()
-        context = "\n\n---\n\n".join(
-            [
-                f"[Source: {item['document_name']}, Page {item['page_number']}]\n{item['content']}"
-                for item in reranked
-            ]
-        )
-        user_prompt = _RAG_USER_TEMPLATE.format(context=context, question=query)
+        if reranked:
+            context = "\n\n---\n\n".join(
+                [
+                    f"[Source: {item['document_name']}, Page {item['page_number']}]\n{item['content']}"
+                    for item in reranked
+                ]
+            )
+            user_prompt = _RAG_USER_TEMPLATE.format(context=context, question=query)
+        else:
+            user_prompt = (
+                f"Question: {query}\n\n"
+                f"Note: No matching documents were found in the knowledge base. "
+                f"Please answer the user's question using general knowledge, "
+                f"and state clearly at the start that no specific workspace documents were used."
+            )
         trace["prompt_tokens"] = len(user_prompt.split())
         trace["stages"]["prompt_builder"] = {
             "name": "Prompt Builder",
@@ -211,21 +233,33 @@ class RetrievalPipeline:
                     "score": item["score"],
                     # rerank_score is None when cross-encoder is disabled or fell back.
                     "rerank_score": item.get("rerank_score"),
+                    "image_paths": item.get("image_paths", []),
                 }
                 for item in reranked
             ],
         }
 
-    async def retrieve_and_generate_context(self, query: str) -> dict:
+    async def retrieve_and_generate_context(
+        self, query: str, conversation_history: list[dict] | None = None
+    ) -> dict:
         """Run retrieval + reranking + prompt building without calling the LLM.
+
+        Args:
+            query: The user's current question.
+            conversation_history: List of prior messages as
+                [{"role": "user"|"assistant", "content": "..."}], most recent last.
+                Injected into the prompt so the LLM has full multi-turn context.
 
         Returns a dict with:
           - trace: full pipeline trace for the Trace Inspector
           - user_prompt: the fully formatted RAG prompt ready for the LLM
+          - history_messages: prior messages formatted for litellm (role/content dicts)
           - citations: list of source chunk citations
         Used by the SSE streaming chat router which calls the LLM itself
         to enable true token-by-token streaming.
         """
+        conversation_history = conversation_history or []
+
         trace = {
             "query_original": query,
             "query_rewritten": query,
@@ -260,7 +294,8 @@ class RetrievalPipeline:
 
         search_start = time.time()
         query_vector = await self.embedding_provider.embed_query(rewritten_query)
-        collection_name = f"kb_{self.kb_id}" if self.kb_id else settings.CHROMA_COLLECTION_NAME
+        active_dim = self.embedding_provider.active_dim
+        collection_name = f"kb_{self.kb_id}_dim{active_dim}" if self.kb_id else settings.CHROMA_COLLECTION_NAME
 
         if self.kb_id and self.db:
             from app.application.ingestion.dimension_guard import verify_query_dimension
@@ -271,8 +306,30 @@ class RetrievalPipeline:
                     query_dim=len(query_vector),
                 )
             except Exception as dim_err:
-                logger.error("Retrieval dimension guard: %s", dim_err)
-                raise
+                logger.warning("Dimension mismatch on retrieval — skipping vector search: %s", dim_err)
+                search_results = []
+                trace["stages"]["dense_search"] = {
+                    "name": "Dense Search",
+                    "duration_ms": 0,
+                    "details": {"error": str(dim_err), "matches": 0},
+                }
+                trace["retrieved_chunks"] = []
+                user_prompt = (
+                    f"## User Question\n{query}\n\n"
+                    f"## Context\nNo documents could be retrieved (embedding dimension mismatch). "
+                    f"The knowledge base needs to be re-indexed.\n\n"
+                    f"## Instructions\n"
+                    f"Tell the user there is an embedding dimension mismatch and that they should "
+                    f"re-ingest their documents. Do NOT answer with general knowledge."
+                )
+                trace["prompt_tokens"] = len(user_prompt.split())
+                trace["total_latency_ms"] = int((time.time() - start_time) * 1000)
+                return {
+                    "trace": trace,
+                    "user_prompt": user_prompt,
+                    "history_messages": conversation_history,
+                    "citations": [],
+                }
 
         try:
             search_results = await self.vector_store.similarity_search(
@@ -302,6 +359,10 @@ class RetrievalPipeline:
                 "score": round(result["score"], 4),
                 "document_name": result["metadata"].get("filename", "document"),
                 "page_number": result["metadata"].get("page_number", 1),
+                "image_paths": [
+                    p for p in result["metadata"].get("image_paths", "").split(",")
+                    if p.strip()
+                ],
             }
             for result in search_results
         ]
@@ -309,7 +370,7 @@ class RetrievalPipeline:
 
         rerank_start = time.time()
         if settings.ENABLE_RERANKING:
-            reranker = CrossEncoderReranker(settings.RERANKER_MODEL)
+            reranker = get_reranker(settings.RERANKER_MODEL)
             reranked, used_reranker = await reranker.rerank(
                 query=rewritten_query,
                 chunks=retrieved,
@@ -336,17 +397,42 @@ class RetrievalPipeline:
             },
         }
 
-        prompt_start = time.time()
-        context = "\n\n---\n\n".join(
-            [
-                f"[Source: {item['document_name']}, Page {item['page_number']}]\n{item['content']}"
-                for item in reranked
-            ]
-        )
-        if not context:
-            context = "No relevant documents found in the knowledge base."
+        # Build conversation history text for the prompt (last 6 messages max to avoid token bloat)
+        history_text = ""
+        if conversation_history:
+            recent_history = conversation_history[-6:]
+            history_lines = []
+            for msg in recent_history:
+                role_label = "User" if msg["role"] == "user" else "Assistant"
+                history_lines.append(f"**{role_label}:** {msg['content']}")
+            history_text = "\n\n".join(history_lines)
+        else:
+            history_text = "(No prior messages in this conversation)"
 
-        user_prompt = _RAG_USER_TEMPLATE.format(context=context, question=query)
+        prompt_start = time.time()
+        if reranked:
+            context = "\n\n---\n\n".join(
+                [
+                    f"**[Source: {item['document_name']}, Page {item['page_number']}]** (relevance: {item['score']:.2f})\n{item['content']}"
+                    for item in reranked
+                ]
+            )
+            user_prompt = _RAG_USER_TEMPLATE.format(
+                context=context,
+                history=history_text,
+                question=query,
+            )
+        else:
+            user_prompt = (
+                f"## Conversation History\n{history_text}\n\n"
+                f"## Current Question\n{query}\n\n"
+                f"## Context\nNo documents matching this query were found in the knowledge base. "
+                f"The knowledge base may be empty or the documents may not cover this topic.\n\n"
+                f"## Instructions\n"
+                f"Inform the user that no relevant documents were retrieved. "
+                f"Suggest they upload documents covering this topic to their knowledge base. "
+                f"Do NOT answer with general knowledge — be transparent about the lack of source material."
+            )
         trace["prompt_tokens"] = len(user_prompt.split())
         trace["stages"]["prompt_builder"] = {
             "name": "Prompt Builder",
@@ -354,6 +440,7 @@ class RetrievalPipeline:
             "details": {
                 "prompt_characters": len(user_prompt),
                 "context_chunks": len(reranked),
+                "history_messages": len(conversation_history),
             },
         }
 
@@ -362,6 +449,7 @@ class RetrievalPipeline:
         return {
             "trace": trace,
             "user_prompt": user_prompt,
+            "history_messages": conversation_history,
             "citations": [
                 {
                     "chunk_id": item["chunk_id"],
@@ -370,6 +458,7 @@ class RetrievalPipeline:
                     "content": item["content"],
                     "score": item["score"],
                     "rerank_score": item.get("rerank_score"),
+                    "image_paths": item.get("image_paths", []),
                 }
                 for item in reranked
             ],
@@ -383,7 +472,7 @@ class RetrievalPipeline:
         All failures are caught internally — a descriptive string is returned
         rather than raising so the SSE generator always receives content.
         """
-        llm = FallbackLLMProvider()
+        llm = get_llm_provider()
         return await llm.complete(
             system_prompt=_RAG_SYSTEM_PROMPT,
             user_prompt=user_prompt,

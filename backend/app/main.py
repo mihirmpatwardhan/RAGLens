@@ -86,6 +86,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "Pipeline will operate in degraded mode."
         )
 
+    # Pre-warm local embedding model in a background thread to prevent GIL freeze on first request
+    def _warm_embedding():
+        from app.infrastructure.embeddings.fallback_embeddings import _load_local_model
+        from app.core.config import get_settings
+        try:
+            _load_local_model(get_settings().LOCAL_EMBEDDING_MODEL)
+            logger.info("  Embeddings:  [OK] Local model pre-warmed")
+        except Exception as e:
+            logger.warning(f"  Embeddings:  [WARN] Failed to pre-warm local model: {e}")
+            
+    import threading
+    threading.Thread(target=_warm_embedding, daemon=True).start()
+
     logger.info("  Status:      [OK] Ready to serve requests")
 
     yield

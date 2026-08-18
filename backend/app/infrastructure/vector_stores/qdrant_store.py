@@ -288,3 +288,14 @@ class QdrantVectorStoreAdapter(VectorStoreAdapter):
             logger.info("Deleted Qdrant collection: %s", collection_name)
         except Exception as exc:
             logger.warning("Failed to delete Qdrant collection '%s': %s", collection_name, exc)
+
+    async def list_collections(self) -> list[str]:
+        """Return all collection names in Qdrant."""
+        if self._client is None:
+            return []
+        try:
+            response = await self._client.get_collections()
+            return [c.name for c in response.collections]
+        except Exception as exc:
+            logger.warning("Failed to list Qdrant collections: %s", exc)
+            return []

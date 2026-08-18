@@ -102,7 +102,8 @@ async def retrieve_chunks_node(state: AgentState) -> dict:
     vector_store = get_vector_store()
     query = state.get("query_rewritten") or state["query"]
     kb_id = state.get("kb_id")
-    collection_name = f"kb_{kb_id}" if kb_id else settings.CHROMA_COLLECTION_NAME
+    active_dim = embedding_provider.active_dim
+    collection_name = f"kb_{kb_id}_dim{active_dim}" if kb_id else settings.CHROMA_COLLECTION_NAME
 
     try:
         query_vector = await embedding_provider.embed_query(query)

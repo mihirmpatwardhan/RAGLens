@@ -72,8 +72,11 @@ class FallbackEmbeddingProvider(EmbeddingProvider):
         from app.core.config import get_settings
         self._settings = get_settings()
         self._openai_client = None
-        # Dimension of the last embedding call — callers can read this.
-        self.active_dim: int = self._settings.DEFAULT_EMBEDDING_DIMENSION
+        # Set active_dim to reflect the actual provider we'll use
+        if self._settings.DEFAULT_EMBEDDING_PROVIDER == "local":
+            self.active_dim: int = self._settings.LOCAL_EMBEDDING_DIMENSION
+        else:
+            self.active_dim = self._settings.DEFAULT_EMBEDDING_DIMENSION
 
     def _get_openai_client(self):
         if self._openai_client is None:
@@ -133,10 +136,29 @@ class FallbackEmbeddingProvider(EmbeddingProvider):
         logger.info("Local embeddings: %d vectors (%s)", len(all_embeddings), model_name)
         return all_embeddings
 
+    async def _use_local_primary(self, texts: list[str]) -> list[list[float]]:
+        """Use local model as PRIMARY — no OpenAI attempt, no warning."""
+        model_name = self._settings.LOCAL_EMBEDDING_MODEL
+        all_embeddings: list[list[float]] = []
+        for i in range(0, len(texts), _BATCH_SIZE):
+            batch = texts[i: i + _BATCH_SIZE]
+            batch_embeddings = await asyncio.to_thread(
+                _sync_encode_local, model_name, batch
+            )
+            all_embeddings.extend(batch_embeddings)
+        self.active_dim = self._settings.LOCAL_EMBEDDING_DIMENSION
+        logger.info("Local embeddings: %d vectors (%s)", len(all_embeddings), model_name)
+        return all_embeddings
+
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """Embed a list of texts with OpenAI primary, local fallback."""
+        """Embed texts. Uses local model directly when DEFAULT_EMBEDDING_PROVIDER=local,
+        otherwise tries OpenAI first with local as fallback."""
         if not texts:
             return []
+
+        # When explicitly configured to use local — skip OpenAI entirely (no wasted retries)
+        if self._settings.DEFAULT_EMBEDDING_PROVIDER == "local":
+            return await self._use_local_primary(texts)
 
         try:
             return await self._try_openai(texts)
@@ -144,7 +166,6 @@ class FallbackEmbeddingProvider(EmbeddingProvider):
             logger.warning("OpenAI embedding failed: %s", exc)
             if self._settings.EMBEDDING_FALLBACK_TO_LOCAL:
                 return await self._use_local_fallback(texts)
-            # No fallback: return zero vectors so the pipeline can handle gracefully.
             logger.error("EMBEDDING_FALLBACK_TO_LOCAL=False and OpenAI failed. Returning zero vectors.")
             dim = self._settings.DEFAULT_EMBEDDING_DIMENSION
             return [[0.0] * dim for _ in texts]
@@ -152,4 +173,23 @@ class FallbackEmbeddingProvider(EmbeddingProvider):
     async def embed_query(self, text: str) -> list[float]:
         """Embed a single query string."""
         results = await self.embed_documents([text])
-        return results[0] if results else [0.0] * self._settings.DEFAULT_EMBEDDING_DIMENSION
+        return results[0] if results else [0.0] * self._settings.LOCAL_EMBEDDING_DIMENSION
+
+
+# ──────────────────────────────────────────────
+# Process-lifetime singleton
+# ──────────────────────────────────────────────
+
+_embedding_provider_instance: FallbackEmbeddingProvider | None = None
+
+
+def get_embedding_provider() -> FallbackEmbeddingProvider:
+    """Return a process-lifetime FallbackEmbeddingProvider singleton.
+
+    Avoids re-creating the OpenAI AsyncClient and re-loading any local model
+    on every request. Safe for use across concurrent async requests.
+    """
+    global _embedding_provider_instance
+    if _embedding_provider_instance is None:
+        _embedding_provider_instance = FallbackEmbeddingProvider()
+    return _embedding_provider_instance

@@ -40,12 +40,15 @@ _DEFAULT_FALLBACK_MODELS = {
     "deepseek": "deepseek/deepseek-chat",
     "mistral": "mistral/mistral-small-latest",
     "groq": "groq/llama-3.1-8b-instant",
-    "openrouter": "openrouter/auto",
+    "openrouter": "openrouter/meta-llama/llama-3.1-8b-instruct",
 }
 
 
 def _build_model_string(provider: str, primary_model: str) -> str:
     """Convert internal provider + model name to litellm model string."""
+    # If primary_model already has the provider prefix, use it as-is.
+    if primary_model.startswith(f"{provider}/"):
+        return primary_model
     if provider == "openai":
         return primary_model  # OpenAI models used as-is
     if provider == "anthropic":
@@ -65,7 +68,12 @@ def _get_api_key_for_provider(provider: str, settings) -> str | None:
         "deepseek": settings.DEEPSEEK_API_KEY,
         "mistral": settings.MISTRAL_API_KEY,
         "groq": settings.GROQ_API_KEY,
-        "openrouter": settings.OPENROUTER_API_KEY_1 or settings.OPENROUTER_API_KEY_2,
+        # litellm reads OPENROUTER_API_KEY env var; also check our numbered keys as fallback
+        "openrouter": (
+            getattr(settings, "OPENROUTER_API_KEY", None)
+            or settings.OPENROUTER_API_KEY_1
+            or settings.OPENROUTER_API_KEY_2
+        ),
     }
     return key_map.get(provider) or None
 
@@ -219,3 +227,21 @@ class FallbackLLMProvider:
             "3. Verify you haven't exceeded API quotas\n\n"
             "Retrieved context is still available in the Trace Inspector."
         )
+
+
+# ──────────────────────────────────────────────
+# Process-lifetime singleton
+# ──────────────────────────────────────────────
+
+_llm_provider_instance: FallbackLLMProvider | None = None
+
+
+def get_llm_provider() -> FallbackLLMProvider:
+    """Return a process-lifetime FallbackLLMProvider singleton.
+
+    Avoids creating a new Settings lookup on every request.
+    """
+    global _llm_provider_instance
+    if _llm_provider_instance is None:
+        _llm_provider_instance = FallbackLLMProvider()
+    return _llm_provider_instance

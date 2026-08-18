@@ -10,7 +10,6 @@ const backendOrigin =
   "http://localhost:8000";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
   turbopack: {
     root: path.join(__dirname),
   },
@@ -24,10 +23,18 @@ const nextConfig: NextConfig = {
         source: "/docs",
         destination: `${backendOrigin.replace(/\/$/, "")}/docs`,
       },
+      {
+        source: "/openapi.json",
+        destination: `${backendOrigin.replace(/\/$/, "")}/openapi.json`,
+      },
     ];
   },
+  // Allow images served from the backend image endpoint
   images: {
-    remotePatterns: [{ protocol: "http", hostname: "localhost" }],
+    remotePatterns: [
+      { protocol: "http", hostname: "localhost" },
+      { protocol: "http", hostname: "127.0.0.1" },
+    ],
   },
 };
 

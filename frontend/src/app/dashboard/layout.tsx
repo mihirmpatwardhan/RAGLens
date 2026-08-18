@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import { usePathname, useRouter } from "next/navigation";
 import { useAppUser } from "@/hooks/use-auth";
-import { useEffect, Suspense } from "react";
+import { useEffect } from "react";
 import { Loader2 } from "lucide-react";
 
 export default function DashboardLayout({
@@ -23,7 +23,7 @@ export default function DashboardLayout({
 
   useEffect(() => {
     if (isLoaded && !isSignedIn) {
-      router.push("/login");
+      router.replace("/login");
     }
   }, [isLoaded, isSignedIn, router]);
 
@@ -44,7 +44,16 @@ export default function DashboardLayout({
 
   // If loaded but not signed in, useEffect above is handling redirect — show nothing
   if (!isSignedIn) {
-    return null;
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-[var(--color-surface-0)]">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-[var(--color-brand-600)]" />
+          <p className="text-sm font-semibold text-[var(--color-text-secondary)] font-display">
+            Redirecting to sign in...
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -58,9 +67,7 @@ export default function DashboardLayout({
       <div className="absolute bottom-1/4 right-1/4 w-[250px] h-[250px] rounded-full bg-[var(--color-accent-500)]/5 filter blur-3xl pointer-events-none z-0 animate-float" />
 
       {/* Sidebar */}
-      <Suspense fallback={<div className={cn("fixed top-0 left-0 h-full z-40 bg-[var(--color-surface-50)]/80 backdrop-blur-xl border-r border-[var(--color-border)]", sidebarCollapsed ? "w-[var(--sidebar-collapsed-width)]" : "w-[var(--sidebar-width)]")} />}>
         <Sidebar />
-      </Suspense>
 
       {/* Main Content */}
       <div

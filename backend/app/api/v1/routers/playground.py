@@ -14,6 +14,8 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
+from app.api.v1.deps import CurrentUser, DbSession
+
 router = APIRouter(prefix="/playground", tags=["Playground"])
 
 
@@ -22,10 +24,6 @@ router = APIRouter(prefix="/playground", tags=["Playground"])
 # ──────────────────────────────────────────────
 
 class QuizGenerateRequest(BaseModel):
-    kb_id: str | None = Field(
-        None,
-        description="Knowledge base UUID to generate quiz from. Omit for global search.",
-    )
     topic: str = Field(
         ...,
         min_length=1,
@@ -56,7 +54,7 @@ class QuizGenerateResponse(BaseModel):
     chunks_used: int
     logs: list[str]
     topic: str
-    kb_id: str | None
+    kb_ids_used: list[str]
 
 
 @router.post(
@@ -64,20 +62,42 @@ class QuizGenerateResponse(BaseModel):
     response_model=QuizGenerateResponse,
     summary="Generate quiz questions from a knowledge base",
 )
-async def generate_quiz_endpoint(request: QuizGenerateRequest) -> QuizGenerateResponse:
+async def generate_quiz_endpoint(
+    request: QuizGenerateRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> QuizGenerateResponse:
     """
-    Generate a structured quiz (Q&A pairs) from documents in a knowledge base.
+    Generate a structured quiz (Q&A pairs) from the user's own knowledge bases.
 
-    The agent retrieves broadly across the KB (more chunks than normal RAG) and
-    uses the configured LLM fallback chain to produce quiz questions.
+    Automatically discovers all KBs owned by the logged-in user — no kb_id needed.
+    The agent retrieves broadly across all user KBs and uses the LLM to produce
+    structured quiz questions grounded in the user's own documents.
 
     **Use cases**: Study aids, knowledge testing, flashcard generation.
     """
+    from sqlalchemy import select
+
     from app.application.agents.quiz_agent import generate_quiz
+    from app.infrastructure.db.models.knowledge import KnowledgeBase
+
+    # Auto-discover all KBs owned by this user — no manual kb_id needed
+    kb_result = await db.execute(
+        select(KnowledgeBase).where(KnowledgeBase.owner_id == current_user.id)
+    )
+    user_kbs = kb_result.scalars().all()
+
+    if not user_kbs:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No knowledge bases found. Please upload documents first before generating a quiz.",
+        )
+
+    kb_ids = [str(kb.id) for kb in user_kbs]
 
     try:
         result = await generate_quiz(
-            kb_id=request.kb_id,
+            kb_ids=kb_ids,
             topic=request.topic,
             num_questions=request.num_questions,
             difficulty=request.difficulty,
@@ -101,7 +121,7 @@ async def generate_quiz_endpoint(request: QuizGenerateRequest) -> QuizGenerateRe
         chunks_used=result.get("chunks_used", 0),
         logs=result.get("logs", []),
         topic=request.topic,
-        kb_id=request.kb_id,
+        kb_ids_used=kb_ids,
     )
 
 

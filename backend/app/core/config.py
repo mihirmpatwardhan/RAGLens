@@ -88,7 +88,8 @@ class Settings(BaseSettings):
     MISTRAL_API_KEY: str = ""
     GROQ_API_KEY: str = ""
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OPENROUTER_API_KEY_1: str = ""
+    OPENROUTER_API_KEY: str = ""      # Primary key name that litellm reads from env
+    OPENROUTER_API_KEY_1: str = ""    # Legacy numbered keys (fallback)
     OPENROUTER_API_KEY_2: str = ""
 
     DEFAULT_LLM_PROVIDER: str = "openai"
@@ -152,6 +153,10 @@ class Settings(BaseSettings):
     # Enables parent-child hierarchical chunking for tables, headers, and images.
     # Falls back gracefully to flat pymupdf extraction if unstructured is not installed.
     ENABLE_LAYOUT_PARSER: bool = True
+    PDF_TEXT_MIN_CHARS_PER_PAGE: int = 40
+    # 0 processes every scanned page; use a positive value only to cap OCR work.
+    PDF_MAX_OCR_PAGES: int = 0
+    PDF_OCR_DPI: int = 200
 
     # ──────────────────────────────────────────────
     # Retrieval

@@ -46,3 +46,11 @@ class VectorStoreAdapter(ABC):
     ) -> None:
         """Delete specific vectors from vector store."""
         pass
+
+    async def list_collections(self) -> list[str]:
+        """Return a list of collection names in the vector store.
+
+        Default implementation returns an empty list. Override in adapters
+        that support collection listing (e.g. Qdrant, Chroma).
+        """
+        return []

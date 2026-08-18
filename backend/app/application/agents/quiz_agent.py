@@ -29,6 +29,8 @@ import logging
 from typing import TypedDict
 
 from app.core.config import get_settings
+from app.infrastructure.embeddings.fallback_embeddings import get_embedding_provider
+from app.infrastructure.llm import get_llm_provider
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -40,7 +42,7 @@ settings = get_settings()
 
 class QuizState(TypedDict):
     """State dictionary for the quiz generation workflow."""
-    kb_id: str | None           # Knowledge base UUID string (scopes vector search)
+    kb_ids: list[str]              # All Knowledge base UUID strings for this user
     topic: str                     # Broad topic/subject for the quiz
     num_questions: int             # How many Q&A pairs to generate
     difficulty: str                # "easy" | "medium" | "hard" | "mixed"
@@ -54,59 +56,72 @@ class QuizState(TypedDict):
 # ──────────────────────────────────────────────
 
 async def retrieve_for_quiz_node(state: QuizState) -> dict:
-    """Broad retrieval across the knowledge base for quiz generation.
+    """Broad retrieval across ALL user knowledge bases for quiz generation.
 
-    Uses a higher top_k than normal RAG (default 30) to get wide coverage
-    across the knowledge base rather than pinpointing one answer.
+    Loops over each kb_id in state['kb_ids'], retrieves top chunks from each,
+    then merges and deduplicates. This ensures the quiz covers all the user's
+    uploaded documents without requiring manual KB selection.
     """
-    from app.infrastructure.embeddings.fallback_embeddings import FallbackEmbeddingProvider
     from app.infrastructure.vector_stores import get_vector_store
 
     logs = list(state.get("agent_logs", []))
-    logs.append("QuizRetriever: Performing broad retrieval for quiz generation...")
+    logs.append("QuizRetriever: Performing broad retrieval across all user knowledge bases...")
 
-    embedding_provider = FallbackEmbeddingProvider()
+    # Use process-lifetime singletons for speed
+    embedding_provider = get_embedding_provider()
     vector_store = get_vector_store()
     topic = state.get("topic") or "general knowledge"
-    kb_id = state.get("kb_id")
-    collection_name = f"kb_{kb_id}" if kb_id else settings.CHROMA_COLLECTION_NAME
+    kb_ids = state.get("kb_ids", [])
+    active_dim = embedding_provider.active_dim
 
-    # Broad retrieval — quiz benefits from more diversity than single-question RAG
-    quiz_top_k = max(state.get("num_questions", 5) * 3, 20)
+    if not kb_ids:
+        logs.append("QuizRetriever: No knowledge bases found for this user.")
+        return {"retrieved_chunks": [], "agent_logs": logs}
 
-    try:
-        query_vector = await embedding_provider.embed_query(
-            f"Study material and key concepts about: {topic}"
-        )
-        results = await vector_store.similarity_search(
-            collection_name=collection_name,
-            query_embedding=query_vector,
-            top_k=quiz_top_k,
-        )
+    # Embed the topic query once, reuse across all KB collections
+    query_vector = await embedding_provider.embed_query(
+        f"Study material and key concepts about: {topic}"
+    )
 
-        chunks = [
-            {
-                "id": res["id"],
-                "content": res["document"],
-                "score": round(res["score"], 4),
-                "document_name": res["metadata"].get("filename", "document"),
-                "page_number": res["metadata"].get("page_number", 1),
-                "content_type": res["metadata"].get("content_type", "text"),
-            }
-            for res in results
-        ]
-        logs.append(f"QuizRetriever: Retrieved {len(chunks)} chunks from '{collection_name}'.")
-    except Exception as exc:
-        chunks = []
-        logs.append(f"QuizRetriever: Retrieval failed: {exc}")
+    # Per-KB retrieval — fetch proportional chunks from each KB
+    per_kb_top_k = max(state.get("num_questions", 5) * 2, 10)
+    all_chunks: list[dict] = []
 
-    return {"retrieved_chunks": chunks, "agent_logs": logs}
+    for kb_id in kb_ids:
+        collection_name = f"kb_{kb_id}_dim{active_dim}"
+        try:
+            results = await vector_store.similarity_search(
+                collection_name=collection_name,
+                query_embedding=query_vector,
+                top_k=per_kb_top_k,
+            )
+            kb_chunks = [
+                {
+                    "id": res["id"],
+                    "content": res["document"],
+                    "score": round(res["score"], 4),
+                    "document_name": res["metadata"].get("filename", "document"),
+                    "page_number": res["metadata"].get("page_number", 1),
+                    "content_type": res["metadata"].get("content_type", "text"),
+                    "kb_id": kb_id,
+                }
+                for res in results
+            ]
+            all_chunks.extend(kb_chunks)
+            logs.append(f"QuizRetriever: KB '{kb_id}' → {len(kb_chunks)} chunks from '{collection_name}'.")
+        except Exception as exc:
+            logs.append(f"QuizRetriever: KB '{kb_id}' retrieval failed ({exc}) — skipping.")
+
+    # Sort merged results by score descending, keep top N for LLM context
+    all_chunks.sort(key=lambda c: c["score"], reverse=True)
+    logs.append(f"QuizRetriever: Total merged chunks: {len(all_chunks)} across {len(kb_ids)} KB(s).")
+
+    return {"retrieved_chunks": all_chunks, "agent_logs": logs}
+
 
 
 async def generate_quiz_node(state: QuizState) -> dict:
     """Generate structured quiz Q&A pairs from the retrieved context."""
-    from app.infrastructure.llm import FallbackLLMProvider
-
     logs = list(state.get("agent_logs", []))
     logs.append("QuizGenerator: Building quiz questions from context...")
 
@@ -136,7 +151,7 @@ async def generate_quiz_node(state: QuizState) -> dict:
         "- Each question must be answerable from the context\n"
         "- Include the source document for each question\n"
         "- Vary question types (factual, conceptual, analytical)\n"
-        "- Return ONLY a valid JSON array — no markdown, no explanations\n\n"
+        "- Return ONLY a valid JSON array — no markdown, no explanations, no code fences\n\n"
         "JSON format:\n"
         '[\n'
         '  {\n'
@@ -162,7 +177,7 @@ async def generate_quiz_node(state: QuizState) -> dict:
         f"Generate exactly {num_questions} quiz questions as a JSON array:"
     )
 
-    llm = FallbackLLMProvider()
+    llm = get_llm_provider()
     raw_response = await llm.complete(system_prompt=system_prompt, user_prompt=user_prompt)
 
     # Parse JSON response
@@ -243,15 +258,15 @@ def _get_quiz_graph():
 # ──────────────────────────────────────────────
 
 async def generate_quiz(
-    kb_id: str | None,
+    kb_ids: list[str],
     topic: str,
     num_questions: int = 5,
     difficulty: str = "mixed",
 ) -> dict:
-    """Generate a quiz from a knowledge base.
+    """Generate a quiz from all knowledge bases owned by a user.
 
     Args:
-        kb_id: Knowledge base UUID to search. None = global search.
+        kb_ids: List of knowledge base UUIDs belonging to the user.
         topic: Topic/subject area for the quiz.
         num_questions: Number of Q&A pairs to generate (1-20).
         difficulty: "easy" | "medium" | "hard" | "mixed"
@@ -266,13 +281,13 @@ async def generate_quiz(
     num_questions = max(1, min(20, num_questions))  # Clamp to [1, 20]
 
     initial_state: QuizState = {
-        "kb_id": kb_id,
+        "kb_ids": kb_ids,
         "topic": topic,
         "num_questions": num_questions,
         "difficulty": difficulty,
         "retrieved_chunks": [],
         "quiz_items": [],
-        "agent_logs": ["QuizCoordinator: Starting quiz generation workflow..."],
+        "agent_logs": [f"QuizCoordinator: Starting quiz generation across {len(kb_ids)} KB(s)..."],
     }
 
     graph = _get_quiz_graph()

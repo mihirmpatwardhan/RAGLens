@@ -14,6 +14,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 
 from app.api.v1.deps import CurrentUser, DbSession, RequireKBEditor, RequireKBViewer, get_kb_role
@@ -118,21 +119,41 @@ async def upload_document(
             detail=f"Unsupported file type: '{content_type}'. Supported types: PDF, DOCX, PPTX, XLSX, TXT, CSV, MD, HTML, JSON, YAML, images (PNG/JPEG/TIFF/BMP/SVG), ZIP, and email formats.",
         )
 
-    # Read file content
-    content = await file.read()
-    file_size = len(content)
+    # Store file locally
+    storage_dir = Path(settings.STORAGE_LOCAL_PATH) / str(kb_id)
+    storage_dir.mkdir(parents=True, exist_ok=True)
 
-    if file_size == 0:
-        raise HTTPException(status_code=400, detail="File is empty")
+    file_ext = os.path.splitext(file.filename or "file")[1]
+    stored_filename = f"{uuid.uuid4()}{file_ext}"
+    storage_path = storage_dir / stored_filename
 
-    if file_size > MAX_FILE_SIZE_BYTES:
+    def _save_chunked():
+        _hasher = hashlib.sha256()
+        _size = 0
+        with open(storage_path, "wb") as f:
+            while chunk := file.file.read(1024 * 1024):
+                _size += len(chunk)
+                if _size > MAX_FILE_SIZE_BYTES:
+                    return None
+                _hasher.update(chunk)
+                f.write(chunk)
+        return _hasher.hexdigest(), _size
+
+    from fastapi.concurrency import run_in_threadpool
+    save_result = await run_in_threadpool(_save_chunked)
+    
+    if save_result is None:
+        storage_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File exceeds {MAX_FILE_SIZE_BYTES // (1024*1024)}MB limit",
         )
+        
+    content_hash, file_size = save_result
 
-    # Generate content hash for deduplication
-    content_hash = hashlib.sha256(content).hexdigest()
+    if file_size == 0:
+        storage_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="File is empty")
 
     # Check for duplicate content in same KB
     existing = await db.execute(
@@ -142,21 +163,11 @@ async def upload_document(
         )
     )
     if existing.scalar_one_or_none():
+        storage_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A document with identical content already exists in this knowledge base.",
         )
-
-    # Store file locally
-    storage_dir = Path(settings.STORAGE_LOCAL_PATH) / str(kb_id)
-    storage_dir.mkdir(parents=True, exist_ok=True)
-
-    file_ext = os.path.splitext(file.filename or "file")[1]
-    stored_filename = f"{uuid.uuid4()}{file_ext}"
-    storage_path = storage_dir / stored_filename
-
-    with open(storage_path, "wb") as f:
-        f.write(content)
 
     # Parse source_date if provided (ISO8601 format)
     parsed_source_date = None
@@ -328,7 +339,7 @@ def _run_github_ingestion_background(
                     db.add(doc)
                     await db.flush()
 
-                collection_name = f"kb_{kb_id}"
+                collection_name = f"kb_{kb_id}_dim{embedding_provider.active_dim}"
                 chunk_ids, metas, docs_text = [], [], []
 
                 for idx, (code_chunk, emb) in enumerate(zip(code_chunks, embeddings, strict=False)):
@@ -620,11 +631,19 @@ async def delete_document(
         storage_path.unlink()
         logger.info(f"Deleted storage file: {storage_path}")
 
-    # 2. Remove vectors from vector store
+    # 2. Update KB stats (moved up to get vector_dimension for cleanup)
+    kb_result = await db.execute(
+        select(KnowledgeBase).where(KnowledgeBase.id == doc.knowledge_base_id)
+    )
+    kb = kb_result.scalar_one_or_none()
+
+    # 3. Remove vectors from vector store
     try:
         from app.infrastructure.vector_stores import get_vector_store
         vector_store = get_vector_store()
-        collection_name = f"kb_{doc.knowledge_base_id}"
+        
+        # Use dimension suffix if available on KB, otherwise fallback to standard
+        collection_name = f"kb_{doc.knowledge_base_id}_dim{kb.vector_dimension}" if kb and kb.vector_dimension else f"kb_{doc.knowledge_base_id}"
 
         # Fetch chunk IDs to delete from vector store
         chunk_result = await db.execute(
@@ -637,12 +656,6 @@ async def delete_document(
     except Exception as e:
         logger.warning(f"Failed to delete vectors for document {doc_id}: {e}")
 
-
-    # 3. Update KB stats
-    kb_result = await db.execute(
-        select(KnowledgeBase).where(KnowledgeBase.id == doc.knowledge_base_id)
-    )
-    kb = kb_result.scalar_one_or_none()
     if kb:
         kb.document_count = max(0, (kb.document_count or 1) - 1)
         kb.storage_bytes = max(0, (kb.storage_bytes or doc.file_size) - doc.file_size)
@@ -690,3 +703,49 @@ async def get_pipeline_status(
         raise HTTPException(status_code=404, detail="No pipeline execution found for this document")
 
     return PipelineRunResponse.model_validate(run)
+
+
+@router.get(
+    "/image",
+    summary="Serve an extracted document image",
+    response_class=FileResponse,
+)
+async def serve_document_image(
+    path: str = Query(..., description="Absolute path to the extracted image file"),
+    current_user: CurrentUser = None,
+):
+    """Serve an extracted image file (e.g. from PDF image extraction).
+
+    The path must be within the configured STORAGE_LOCAL_PATH to prevent
+    directory traversal attacks.
+    """
+    storage_root = Path(settings.STORAGE_LOCAL_PATH).resolve()
+    requested_path = Path(path).resolve()
+
+    # Security: ensure the image is within the storage directory
+    try:
+        requested_path.relative_to(storage_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied: path outside storage root")
+
+    if not requested_path.exists() or not requested_path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Determine MIME type from extension
+    ext = requested_path.suffix.lower()
+    mime_map = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".tiff": "image/tiff",
+        ".bmp": "image/bmp",
+    }
+    media_type = mime_map.get(ext, "application/octet-stream")
+
+    return FileResponse(
+        path=str(requested_path),
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
