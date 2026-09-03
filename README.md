@@ -58,6 +58,38 @@ flowchart TB
 
 For the full component map, sequence diagrams, persistence model, deployment topology, and security boundaries, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+### Architecture explained
+
+The diagram follows the lifecycle of a request from the browser to the model and back:
+
+1. **Frontend and authentication** — The Next.js dashboard is the user-facing layer. Clerk owns sign-in and session management. The browser sends the Clerk bearer token with API requests; the frontend never receives provider API keys.
+2. **API and authorization** — FastAPI is the only application boundary for protected data. It verifies the JWT, resolves the local user, checks the selected knowledge-base membership, and applies the `owner`/`editor`/`viewer` role before performing the operation.
+3. **Relational persistence** — PostgreSQL stores ownership and business state: users, knowledge bases, members, documents, chunks, conversations, messages, pipeline runs, prompt templates, and agent runs. It is the source of truth for access control and answer history.
+4. **File storage** — Original uploads and extracted page images are stored separately from database metadata. Storage paths are document- and workspace-scoped so a source file cannot be fetched by knowing an unrelated URL or ID.
+5. **Ingestion pipeline** — Upload processing parses text and layout, uses OCR for scanned pages when needed, extracts tables/images, creates metadata-rich chunks, generates embeddings, and writes vectors to the selected KB collection. Processing progress and failures are recorded in `pipeline_runs`.
+6. **Vector retrieval** — Qdrant stores semantic vectors in collections named with the knowledge-base ID and embedding dimension. A query is embedded with the active embedding provider, candidates are retrieved, reranked, and filtered before they can enter the LLM prompt.
+7. **Answer generation** — The retrieval pipeline builds a prompt containing only relevant chunks and source metadata. LiteLLM sends it to the configured provider fallback chain, and FastAPI streams status, trace, citations, and answer tokens to the UI through SSE.
+8. **Optional verification** — In `Fact-check & correct` mode, `ddgs` is called only after relevant document evidence has been found. Web snippets are evidence for comparison, not a replacement for workspace retrieval. In `Document only` mode, the web is never called.
+
+This separation keeps authentication, persistence, retrieval, generation, and external verification independently observable and prevents a no-match query from turning into an unrelated web answer.
+
+### API surface
+
+All routes below are under `/api/v1` and require authentication unless marked public.
+
+| Route group | Main responsibilities |
+| --- | --- |
+| `/auth` | Current-user resolution and local auth support. |
+| `/knowledge-bases` | Create, list, update, and delete workspaces. |
+| `/knowledge-bases/{id}/members` | Invite/list/update/remove KB members and roles. |
+| `/documents` | Upload files or GitHub content, inspect status, list/delete documents, and fetch protected source images. |
+| `/chat` | Create conversations, list messages, and stream grounded answers over SSE. |
+| `/playground` | Generate document-backed quizzes and run configurable prompts. |
+| `/prompts` | Create, list, update, delete, and share reusable prompt templates. |
+| `/agents` | Start, inspect, approve, reject, and continue KB-scoped agent runs. |
+| `/analytics` | Return live workspace aggregate metrics. |
+| `/health`, `/ready`, `/version` | Service health/readiness/version checks; intentionally public. |
+
 ## Main request flows
 
 ### Upload and ingestion
@@ -209,6 +241,26 @@ npm run build
 ```bash
 python -m compileall backend/app
 ```
+
+## Implemented and remaining scope
+
+### Implemented
+
+- Workspace-scoped retrieval and document access checks.
+- Owner/editor/viewer RBAC for knowledge bases.
+- Secure agent-run ownership and KB validation.
+- Document image extraction, relevance ranking, and authenticated inline rendering.
+- Quiz options that require user selection before revealing the answer.
+- Prompt template visibility rules for private and workspace-shared templates.
+- Retrieval traces with document citations and optional web-source links.
+
+### Intentionally not implemented yet
+
+- Model comparison is still a placeholder; the playground can run one configured model at a time.
+- Evaluation, experiments, and global runtime-settings screens remain honest placeholders because they do not yet persist complete backend state.
+- Fact-checking verifies claims relevant to the current retrieved question; it is not a full page-by-page audit of an entire PDF. A whole-document audit would need a separate batch workflow.
+- Email delivery for member invitations is not implied by a membership record; production invitations should add an email provider, expiry, acceptance, and audit trail.
+- Production deployment still needs operational controls such as secret-manager integration, HTTPS, database migrations in CI/CD, backups, monitoring, and rate-limit enforcement at the edge.
 
 ## Product boundary
 
