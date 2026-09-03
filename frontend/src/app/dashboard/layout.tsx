@@ -73,7 +73,7 @@ export default function DashboardLayout({
       <div
         className={cn(
           "flex-1 flex flex-col min-w-0 transition-all duration-300 ease-[var(--ease-out-expo)] relative z-10",
-          sidebarCollapsed ? "ml-[var(--sidebar-collapsed-width)]" : "ml-[var(--sidebar-width)]"
+          sidebarCollapsed ? "md:ml-[var(--sidebar-collapsed-width)]" : "md:ml-[var(--sidebar-width)]"
         )}
       >
         {/* Header */}

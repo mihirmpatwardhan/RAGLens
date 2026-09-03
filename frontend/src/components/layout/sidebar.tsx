@@ -4,22 +4,20 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Brain,
   MessageSquare,
   Database,
   FileText,
   GitBranch,
   Beaker,
   BarChart3,
-  Target,
   Settings,
   ChevronLeft,
   ChevronRight,
   Plus,
   Sparkles,
   Layers,
-  FlaskConical,
 } from "lucide-react";
+import { BrandLogo } from "@/components/common/brand-logo";
 import { useThemeStore } from "@/stores/theme-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
@@ -67,8 +65,6 @@ const NAV_GROUPS: NavGroup[] = [
     title: "Insights",
     items: [
       { title: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
-      { title: "Quality Check", href: "/dashboard/evaluation", icon: Target },
-      { title: "A/B Tests", href: "/dashboard/experiments", icon: FlaskConical },
     ],
   },
 ];
@@ -76,8 +72,16 @@ const NAV_GROUPS: NavGroup[] = [
 function SidebarInner() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { sidebarCollapsed, toggleSidebar } = useThemeStore();
+  const {
+    sidebarCollapsed: storedSidebarCollapsed,
+    mobileSidebarOpen,
+    setMobileSidebarOpen,
+    toggleSidebar,
+  } = useThemeStore();
   const { user } = useAuthStore();
+  // A mobile drawer is always expanded so labels remain readable, even when
+  // the desktop collapsed preference was persisted in local storage.
+  const sidebarCollapsed = storedSidebarCollapsed && !mobileSidebarOpen;
   interface GroupedConversations {
     workspaces: {
       id: string;
@@ -90,6 +94,8 @@ function SidebarInner() {
   }
 
   const [groupedChats, setGroupedChats] = useState<GroupedConversations | null>(null);
+
+  const closeMobileSidebar = () => setMobileSidebarOpen(false);
 
   useEffect(() => {
     async function loadRecentChats() {
@@ -105,14 +111,22 @@ function SidebarInner() {
   }, [user, pathname, searchParams]);
 
   return (
-    <aside
-      className={cn(
-        "fixed top-0 left-0 h-full z-40 flex flex-col border-r border-[var(--color-border)] bg-[var(--color-surface-50)]/80 backdrop-blur-xl transition-all duration-300 ease-[var(--ease-out-expo)]",
-        sidebarCollapsed
-          ? "w-[var(--sidebar-collapsed-width)]"
-          : "w-[var(--sidebar-width)]"
+    <>
+      {mobileSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={closeMobileSidebar}
+          className="fixed inset-0 z-30 bg-black/30 backdrop-blur-[2px] md:hidden"
+        />
       )}
-    >
+      <aside
+        className={cn(
+          "fixed top-0 left-0 h-full z-40 flex w-[var(--sidebar-width)] flex-col border-r border-[var(--color-border)] bg-[var(--color-surface-50)]/95 backdrop-blur-xl transition-all duration-300 ease-[var(--ease-out-expo)] md:translate-x-0",
+          mobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
+          sidebarCollapsed ? "md:w-[var(--sidebar-collapsed-width)]" : "md:w-[var(--sidebar-width)]"
+        )}
+      >
       {/* Animated gradient edge accent */}
       <div className="absolute top-0 right-0 w-[2px] h-full overflow-hidden z-20">
         <div 
@@ -132,22 +146,23 @@ function SidebarInner() {
         {/* Logo */}
         <div className="h-[var(--header-height)] flex items-center px-4 border-b border-[var(--color-border)]">
           <Link href="/dashboard" className="flex items-center gap-3 overflow-hidden">
-            <motion.div
-              className="w-9 h-9 min-w-[36px] rounded-xl bg-gradient-to-br from-[var(--color-brand-500)] to-[var(--color-accent-400)] flex items-center justify-center shadow-lg glow-brand"
-              whileHover={{ scale: 1.08, rotate: 5 }}
-              transition={{ type: "spring", stiffness: 400, damping: 15 }}
-            >
-              <Brain className="w-5 h-5 text-white" />
-            </motion.div>
             <AnimatePresence>
-              {!sidebarCollapsed && (
+              {sidebarCollapsed ? (
+                <motion.div
+                  className="flex h-9 w-9 min-w-[36px] items-center justify-center overflow-hidden rounded-xl bg-white shadow-lg"
+                  whileHover={{ scale: 1.08, rotate: 5 }}
+                  transition={{ type: "spring", stiffness: 400, damping: 15 }}
+                >
+                  <BrandLogo compact className="h-9 w-9" />
+                </motion.div>
+              ) : (
                 <motion.span
                   initial={{ opacity: 0, width: 0 }}
                   animate={{ opacity: 1, width: "auto" }}
                   exit={{ opacity: 0, width: 0 }}
-                  className="text-base font-bold tracking-tight whitespace-nowrap overflow-hidden font-display"
+                  className="flex h-10 w-[145px] items-center overflow-hidden"
                 >
-                  <span className="gradient-text font-display">RAGLense</span>
+                  <BrandLogo className="h-10 w-[145px]" />
                 </motion.span>
               )}
             </AnimatePresence>
@@ -156,8 +171,9 @@ function SidebarInner() {
 
         {/* New Chat Button */}
         <div className="px-3 pt-4 pb-2">
-          <Link
-            href="/dashboard"
+            <Link
+              href="/dashboard"
+              onClick={closeMobileSidebar}
             className={cn(
               "flex items-center gap-2.5 rounded-xl transition-all duration-200 font-semibold text-sm btn-primary btn-shimmer",
               sidebarCollapsed
@@ -220,6 +236,7 @@ function SidebarInner() {
                         <Link
                           key={chat.id}
                           href={`/dashboard?chat=${chat.id}`}
+                          onClick={closeMobileSidebar}
                           className={cn(
                             "flex items-center gap-3 rounded-xl transition-all duration-200 relative group",
                             sidebarCollapsed
@@ -263,6 +280,7 @@ function SidebarInner() {
                         <Link
                           key={chat.id}
                           href={`/dashboard?chat=${chat.id}`}
+                          onClick={closeMobileSidebar}
                           className={cn(
                             "flex items-center gap-3 rounded-xl transition-all duration-200 relative group",
                             sidebarCollapsed
@@ -323,6 +341,7 @@ function SidebarInner() {
                     <Link
                       key={item.href}
                       href={item.href}
+                      onClick={closeMobileSidebar}
                       className={cn(
                         "flex items-center gap-3 rounded-xl transition-all duration-200 relative group",
                         sidebarCollapsed
@@ -432,6 +451,7 @@ function SidebarInner() {
         <div className="border-t border-[var(--color-border)] p-3 space-y-1">
           <Link
             href="/dashboard/settings"
+            onClick={closeMobileSidebar}
             className={cn(
               "flex items-center gap-3 rounded-xl transition-all duration-200 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-200)]",
               sidebarCollapsed ? "w-10 h-10 justify-center mx-auto" : "px-3 py-2.5"
@@ -456,8 +476,9 @@ function SidebarInner() {
 
           <button
             onClick={toggleSidebar}
+            type="button"
             className={cn(
-              "flex items-center gap-3 rounded-xl transition-all duration-200 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-200)] w-full",
+              "hidden md:flex items-center gap-3 rounded-xl transition-all duration-200 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-200)] w-full",
               sidebarCollapsed ? "w-10 h-10 justify-center mx-auto" : "px-3 py-2.5"
             )}
           >
@@ -470,9 +491,21 @@ function SidebarInner() {
               </>
             )}
           </button>
+          <button
+            onClick={closeMobileSidebar}
+            type="button"
+            className={cn(
+              "flex md:hidden items-center gap-3 rounded-xl transition-all duration-200 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-200)] w-full",
+              "px-3 py-2.5"
+            )}
+          >
+            <ChevronLeft className="w-[18px] h-[18px]" />
+            <span className="text-sm font-semibold font-display">Close menu</span>
+          </button>
         </div>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }
 

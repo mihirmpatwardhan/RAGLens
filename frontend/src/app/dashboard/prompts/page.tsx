@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import {
   BookTemplate,
   Check,
-  ChevronRight,
   Copy,
   Edit3,
   Loader2,
@@ -13,10 +12,14 @@ import {
   Sparkles,
   Tag,
   Trash2,
+  UserPlus,
+  Users,
+  ShieldCheck,
   X,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { apiClient, getErrorMessage } from "@/lib/api-client";
+import type { KnowledgeBase } from "@/types";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -42,6 +45,14 @@ type CreateOrUpdatePayload = {
   default_model: string;
   default_temperature: number;
   knowledge_base_id?: string | null;
+};
+
+type WorkspaceMember = {
+  id: string;
+  user_id: string;
+  email: string | null;
+  full_name: string | null;
+  role: "owner" | "editor" | "viewer" | string;
 };
 
 // ─── Model Options ──────────────────────────────────────────────────────────────
@@ -302,10 +313,12 @@ const iconBtnStyle: React.CSSProperties = {
 
 function TemplateModal({
   template,
+  knowledgeBases,
   onClose,
   onSave,
 }: {
   template: PromptTemplate | null; // null = create mode
+  knowledgeBases: KnowledgeBase[];
   onClose: () => void;
   onSave: () => void;
 }) {
@@ -318,6 +331,7 @@ function TemplateModal({
   const [temperature, setTemperature] = useState(
     template?.default_temperature ?? 0.1
   );
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState(template?.knowledge_base_id ?? "");
   const [isPublic, setIsPublic] = useState(template?.is_public ?? false);
 
   const detectedVars = extractVariables(content);
@@ -334,6 +348,7 @@ function TemplateModal({
       is_public: isPublic,
       default_model: model,
       default_temperature: temperature,
+      knowledge_base_id: knowledgeBaseId || null,
     };
 
     try {
@@ -459,6 +474,25 @@ function TemplateModal({
           )}
         </div>
 
+        {/* Workspace scope */}
+        <div>
+          <label htmlFor="template-workspace" style={labelStyle}>Workspace scope</label>
+          <select
+            id="template-workspace"
+            value={knowledgeBaseId}
+            onChange={(e) => setKnowledgeBaseId(e.target.value)}
+            style={inputStyle}
+          >
+            <option value="">Personal template (only me)</option>
+            {knowledgeBases.map((kb) => (
+              <option key={kb.id} value={kb.id}>{kb.name}</option>
+            ))}
+          </select>
+          <p style={{ margin: "6px 0 0", fontSize: "11px", color: "var(--color-text-muted)" }}>
+            Choose a workspace to share this template with its members.
+          </p>
+        </div>
+
         {/* Model + Temperature row */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
           <div>
@@ -507,7 +541,9 @@ function TemplateModal({
             style={{ accentColor: "var(--color-brand-600)", width: "14px", height: "14px" }}
           />
           <span style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>
-            Make this template visible to all workspace members
+            {knowledgeBaseId
+              ? "Share this template with workspace members"
+              : "Make this template globally visible"}
           </span>
         </label>
 
@@ -559,6 +595,139 @@ function TemplateModal({
   );
 }
 
+function TeamAccessModal({
+  knowledgeBases,
+  onClose,
+}: {
+  knowledgeBases: KnowledgeBase[];
+  onClose: () => void;
+}) {
+  const [selectedKbId, setSelectedKbId] = useState(knowledgeBases[0]?.id ?? "");
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"editor" | "viewer">("viewer");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const loadMembers = useCallback(async () => {
+    if (!selectedKbId) {
+      setMembers([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await apiClient.get<{ members: WorkspaceMember[] }>(
+        `/knowledge-bases/${selectedKbId}/members`
+      );
+      setMembers(response.data.members);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedKbId]);
+
+  useEffect(() => {
+    // This effect subscribes to the selected workspace's remote member list.
+    // The state updates happen from the async request, not from render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadMembers();
+  }, [loadMembers]);
+
+  const inviteMember = async () => {
+    if (!selectedKbId || !email.trim()) return toast.error("Enter a member email");
+    setSaving(true);
+    try {
+      await apiClient.post(`/knowledge-bases/${selectedKbId}/members`, {
+        email: email.trim(),
+        role,
+      });
+      setEmail("");
+      toast.success("Member added to workspace");
+      await loadMembers();
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateRole = async (userId: string, nextRole: string) => {
+    try {
+      await apiClient.patch(`/knowledge-bases/${selectedKbId}/members/${userId}`, { role: nextRole });
+      setMembers((current) => current.map((member) => member.user_id === userId ? { ...member, role: nextRole } : member));
+      toast.success("Member role updated");
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+  };
+
+  const removeMember = async (member: WorkspaceMember) => {
+    if (!confirm(`Remove ${member.email ?? "this member"} from the workspace?`)) return;
+    try {
+      await apiClient.delete(`/knowledge-bases/${selectedKbId}/members/${member.user_id}`);
+      setMembers((current) => current.filter((item) => item.user_id !== member.user_id));
+      toast.success("Member removed");
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+  };
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}
+      onClick={(event) => event.target === event.currentTarget && onClose()}
+    >
+      <div style={{ background: "var(--color-surface-0)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-xl)", width: "100%", maxWidth: "620px", maxHeight: "90vh", overflowY: "auto", padding: "28px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "17px", fontWeight: 700, color: "var(--color-text-primary)" }}>Team access</h2>
+            <p style={{ margin: "5px 0 0", fontSize: "12px", color: "var(--color-text-muted)" }}>Add members who can use shared templates and workspace files.</p>
+          </div>
+          <button id="team-access-close-btn" onClick={onClose} style={{ ...iconBtnStyle, border: "none", background: "none" }}><X size={16} /></button>
+        </div>
+
+        <label htmlFor="team-workspace" style={labelStyle}>Workspace</label>
+        <select id="team-workspace" value={selectedKbId} onChange={(event) => setSelectedKbId(event.target.value)} style={inputStyle}>
+          {knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}
+        </select>
+
+        {selectedKbId ? (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: "8px", marginTop: "18px" }}>
+              <input id="team-member-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="member@example.com" style={inputStyle} />
+              <select id="team-member-role" value={role} onChange={(event) => setRole(event.target.value as "editor" | "viewer")} style={{ ...inputStyle, width: "110px" }}>
+                <option value="viewer">Viewer</option>
+                <option value="editor">Editor</option>
+              </select>
+              <button id="team-member-add-btn" onClick={() => void inviteMember()} disabled={saving} style={{ display: "inline-flex", alignItems: "center", gap: "6px", border: "none", borderRadius: "var(--radius-md)", padding: "9px 14px", background: "var(--color-brand-600)", color: "#fff", fontSize: "13px", fontWeight: 600, cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.65 : 1 }}>
+                <UserPlus size={14} /> Add
+              </button>
+            </div>
+            <p style={{ margin: "8px 0 18px", fontSize: "11px", color: "var(--color-text-muted)" }}>The user must already have a RAGLens account with this email.</p>
+
+            <div style={{ borderTop: "1px solid var(--color-border)", paddingTop: "14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "7px", marginBottom: "10px", color: "var(--color-text-secondary)", fontSize: "13px", fontWeight: 600 }}><Users size={15} /> Members ({members.length})</div>
+              {loading ? <p style={{ fontSize: "13px", color: "var(--color-text-muted)" }}>Loading members...</p> : members.length === 0 ? <p style={{ fontSize: "13px", color: "var(--color-text-muted)" }}>No additional members yet. You are the workspace owner.</p> : (
+                <div style={{ display: "grid", gap: "8px" }}>
+                  {members.map((member) => (
+                    <div key={member.user_id} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px", border: "1px solid var(--color-border)", borderRadius: "var(--radius-md)" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: "13px", color: "var(--color-text-primary)" }}>{member.full_name || member.email}</div><div style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>{member.email}</div></div>
+                      <ShieldCheck size={14} style={{ color: "var(--color-text-muted)" }} />
+                      <select aria-label={`Role for ${member.email ?? member.user_id}`} value={member.role} onChange={(event) => void updateRole(member.user_id, event.target.value)} style={{ ...inputStyle, width: "100px", padding: "6px 8px" }}><option value="viewer">Viewer</option><option value="editor">Editor</option></select>
+                      <button aria-label={`Remove ${member.email ?? member.user_id}`} onClick={() => void removeMember(member)} style={{ ...iconBtnStyle, color: "var(--color-error)" }}><Trash2 size={14} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        ) : <p style={{ marginTop: "18px", fontSize: "13px", color: "var(--color-text-muted)" }}>Create a workspace before adding members.</p>}
+      </div>
+    </div>
+  );
+}
+
 const labelStyle: React.CSSProperties = {
   display: "block",
   fontSize: "12px",
@@ -585,13 +754,13 @@ const inputStyle: React.CSSProperties = {
 
 export default function PromptsPage() {
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
+  const [teamModalOpen, setTeamModalOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<PromptTemplate | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
-
   const filtered = templates.filter(
     (t) =>
       t.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -601,11 +770,13 @@ export default function PromptsPage() {
   const loadTemplates = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await apiClient.get<{ items: PromptTemplate[]; total: number }>(
-        "/prompts?include_public=true&page_size=100"
-      );
-      setTemplates(res.data.items);
-      setTotal(res.data.total);
+      const [templateResponse, workspaceResponse] = await Promise.all([
+        apiClient.get<{ items: PromptTemplate[]; total: number }>("/prompts?include_public=true&page_size=100"),
+        apiClient.get<{ items: KnowledgeBase[] }>("/knowledge-bases?page_size=100"),
+      ]);
+      setTemplates(templateResponse.data.items);
+      setTotal(templateResponse.data.total);
+      setKnowledgeBases(workspaceResponse.data.items);
     } catch (err) {
       toast.error(getErrorMessage(err));
     } finally {
@@ -634,15 +805,12 @@ export default function PromptsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    setDeleting(id);
     try {
       await apiClient.delete(`/prompts/${id}`);
       toast.success("Template deleted");
       loadTemplates();
     } catch (err) {
       toast.error(getErrorMessage(err));
-    } finally {
-      setDeleting(null);
     }
   };
 
@@ -734,6 +902,30 @@ export default function PromptsPage() {
               }}
             />
           </div>
+
+          <button
+            id="team-access-btn"
+            onClick={() => setTeamModalOpen(true)}
+            disabled={knowledgeBases.length === 0}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "9px 16px",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--color-border)",
+              background: "var(--color-surface-50)",
+              color: "var(--color-text-secondary)",
+              fontSize: "13px",
+              fontWeight: 600,
+              cursor: knowledgeBases.length === 0 ? "not-allowed" : "pointer",
+              opacity: knowledgeBases.length === 0 ? 0.55 : 1,
+              transition: "opacity 0.15s ease",
+            }}
+          >
+            <Users size={14} />
+            Team access
+          </button>
 
           <button
             id="create-template-btn"
@@ -843,9 +1035,13 @@ export default function PromptsPage() {
       {modalOpen && (
         <TemplateModal
           template={editTarget}
+          knowledgeBases={knowledgeBases}
           onClose={() => setModalOpen(false)}
           onSave={handleModalSave}
         />
+      )}
+      {teamModalOpen && (
+        <TeamAccessModal knowledgeBases={knowledgeBases} onClose={() => setTeamModalOpen(false)} />
       )}
     </div>
   );

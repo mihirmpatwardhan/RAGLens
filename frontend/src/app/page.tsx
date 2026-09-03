@@ -4,7 +4,6 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import {
   ArrowRight,
-  Brain,
   CheckCircle2,
   Database,
   FileUp,
@@ -17,6 +16,7 @@ import {
   Send,
   Zap,
 } from "lucide-react";
+import { BrandLogo } from "@/components/common/brand-logo";
 
 const WORKFLOW = [
   { 
@@ -49,11 +49,8 @@ export default function LandingPage() {
       {/* ── Navigation ── */}
       <nav className="sticky top-0 z-50 border-b border-[var(--color-border)] bg-[var(--color-surface-0)]/90 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-5 sm:px-6 h-16 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-3">
-            <span className="w-10 h-10 rounded-lg bg-[var(--color-brand-600)] text-white flex items-center justify-center shadow-md shadow-brand/10">
-              <Brain className="w-5 h-5" />
-            </span>
-            <span className="font-display text-lg font-bold">RAGLens</span>
+          <Link href="/" className="flex items-center">
+            <BrandLogo className="h-12 w-44 sm:h-14 sm:w-52" />
           </Link>
 
           <div className="flex items-center gap-2">
@@ -277,7 +274,7 @@ export default function LandingPage() {
       <footer className="border-t border-[var(--color-border)] py-8 bg-[var(--color-surface-50)]">
         <div className="max-w-7xl mx-auto px-5 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <Brain className="w-5 h-5 text-[var(--color-brand-600)]" />
+            <BrandLogo compact className="h-7 w-7" />
             <span className="text-xs text-[var(--color-text-secondary)] font-semibold">
               RAGLens — Open-Source AI Knowledge Platform
             </span>

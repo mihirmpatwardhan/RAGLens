@@ -4,7 +4,18 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useAppAuth, useAppUser } from "@/hooks/use-auth";
-import { Bot, Database, FileUp, Loader2, MessageSquareText, Send, Zap } from "lucide-react";
+import {
+  Bot,
+  Database,
+  ExternalLink,
+  FileCheck2,
+  FileUp,
+  Globe2,
+  Loader2,
+  MessageSquareText,
+  Send,
+  Zap,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import toast from "react-hot-toast";
@@ -24,6 +35,69 @@ type ChatMessage = {
   streamingStatus?: boolean;
 };
 
+type AnswerMode = "strict" | "enhanced";
+
+function imagePathsFromCitations(citations: unknown): string[] {
+  if (!Array.isArray(citations)) return [];
+
+  return Array.from(
+    new Set(
+      citations.flatMap((citation) => {
+        if (!citation || typeof citation !== "object") return [];
+        const paths = (citation as { image_paths?: unknown }).image_paths;
+        return Array.isArray(paths) ? paths.filter((path): path is string => typeof path === "string" && path.length > 0) : [];
+      })
+    )
+  );
+}
+
+function CitationImage({ path, alt }: { path: string; alt: string }) {
+  const { getToken } = useAppAuth();
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+
+    async function loadImage() {
+      try {
+        const token = await getToken();
+        const response = await fetch(
+          getStreamingApiUrl(`/documents/image?path=${encodeURIComponent(path)}`),
+          { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
+        );
+        if (!response.ok) throw new Error(`Image request failed (${response.status})`);
+
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (!cancelled) setSrc(objectUrl);
+      } catch {
+        // A missing/removed source image should not break the whole answer card.
+      }
+    }
+
+    void loadImage();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [getToken, path]);
+
+  if (!src) return null;
+
+  return (
+    <a
+      href={src}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] transition hover:opacity-90"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt={alt} className="h-32 w-full object-cover" />
+    </a>
+  );
+}
+
 function ChatPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -35,10 +109,12 @@ function ChatPageInner() {
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedTrace, setSelectedTrace] = useState<RetrievalTrace | null>(null);
+  const [answerMode, setAnswerMode] = useState<AnswerMode>("strict");
   const { getToken } = useAppAuth();
   const { user } = useAppUser();
   const { rightPanelOpen, setRightPanelOpen } = useThemeStore();
   const endRef = useRef<HTMLDivElement>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
 
   const selectedKb = useMemo(
     () => knowledgeBases.find((kb) => kb.id === selectedKbId) || null,
@@ -50,7 +126,7 @@ function ChatPageInner() {
       const { data } = await apiClient.get("/knowledge-bases");
       const items = data.items || [];
       setKnowledgeBases(items);
-      if (!chatId) {
+      if (!chatId && items.length > 0) {
         setSelectedKbId((current) => current || items[0]?.id || "");
       }
     } catch (error) {
@@ -72,17 +148,28 @@ function ChatPageInner() {
   useEffect(() => {
     async function loadConversation() {
       if (chatId) {
+        // Prevent re-fetching and wiping out active streaming messages on the first question
+        if (activeConversationIdRef.current === chatId) {
+          return;
+        }
+        activeConversationIdRef.current = chatId;
+
         try {
           const { data: convs } = await apiClient.get("/chat/conversations");
           const targetConv = convs.find((c: Record<string, unknown>) => c.id === chatId);
           
-          if (targetConv && targetConv.knowledge_base_id) {
-            setSelectedKbId(targetConv.knowledge_base_id as string);
+          if (targetConv) {
+            if (targetConv.knowledge_base_id) {
+              setSelectedKbId(targetConv.knowledge_base_id as string);
+            }
             setConversationId(chatId);
             const { data: msgs } = await apiClient.get(`/chat/conversations/${chatId}/messages`);
             const formattedMsgs = msgs.map((m: Record<string, unknown>) => ({
-               ...m,
-               trace: m.pipeline_trace || m.trace || null
+              ...m,
+              trace: m.pipeline_trace || m.trace || null,
+              // Citations are persisted with the assistant message. Rebuild the
+              // render-only image list when an existing chat is opened.
+              image_paths: imagePathsFromCitations(m.citations),
             }));
             setMessages(formattedMsgs as ChatMessage[]);
             
@@ -97,6 +184,7 @@ function ChatPageInner() {
           console.error("Failed to load specific conversation", error);
         }
       } else {
+        activeConversationIdRef.current = null;
         setConversationId(null);
         setMessages([]);
         setSelectedTrace(null);
@@ -106,14 +194,15 @@ function ChatPageInner() {
     void loadConversation();
   }, [chatId, router]);
 
-  async function ensureConversation(title: string) {
+  async function ensureConversation(title: string, kbId: string) {
     if (conversationId) return conversationId;
 
     const { data } = await apiClient.post("/chat/conversations", {
       title: title.slice(0, 80),
-      knowledge_base_id: selectedKbId || null,
+      knowledge_base_id: kbId || null,
     });
 
+    activeConversationIdRef.current = data.id;
     setConversationId(data.id);
     router.replace(`/dashboard?chat=${data.id}`);
     return data.id as string;
@@ -123,9 +212,10 @@ function ChatPageInner() {
     const prompt = input.trim();
     if (!prompt || isStreaming) return;
 
-    if (!selectedKbId) {
-      toast.error("Please create or select a workspace first.");
-      return;
+    let kbToUse = selectedKbId;
+    if (!kbToUse && knowledgeBases.length > 0) {
+      kbToUse = knowledgeBases[0].id;
+      setSelectedKbId(kbToUse);
     }
 
     const assistantId = crypto.randomUUID();
@@ -139,7 +229,7 @@ function ChatPageInner() {
     setIsStreaming(true);
 
     try {
-      const activeConversationId = await ensureConversation(prompt);
+      const activeConversationId = await ensureConversation(prompt, kbToUse);
       const token = await getToken();
       const response = await fetch(getStreamingApiUrl(`/chat/conversations/${activeConversationId}/messages`), {
         method: "POST",
@@ -149,7 +239,8 @@ function ChatPageInner() {
         },
         body: JSON.stringify({
           content: prompt,
-          knowledge_base_id: selectedKbId,
+          knowledge_base_id: kbToUse || null,
+          answer_mode: answerMode,
         }),
       });
 
@@ -188,9 +279,7 @@ function ChatPageInner() {
             setRightPanelOpen(true);
             // Extract any image paths from citations in trace
             const traceCitations = (payload as Record<string, unknown[]>).citations ?? [];
-            const allImages = traceCitations.flatMap(
-              (c: unknown) => (c as { image_paths?: string[] }).image_paths ?? []
-            );
+            const allImages = imagePathsFromCitations(traceCitations);
             setMessages((current) =>
               current.map((message) =>
                 message.id === assistantId
@@ -320,7 +409,7 @@ function ChatPageInner() {
             <div className="mx-auto max-w-3xl space-y-6 px-4 py-6">
               <AnimatePresence>
                 {messages.map((message) => (
-                  <motion.button
+                  <motion.div
                     key={message.id}
                     initial={{ opacity: 0, y: 12 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -360,21 +449,11 @@ function ChatPageInner() {
                       {message.role === "assistant" && message.image_paths && message.image_paths.length > 0 ? (
                         <div className="mt-3 grid grid-cols-2 gap-2">
                           {message.image_paths.slice(0, 4).map((imgPath, imgIdx) => (
-                            <a
+                            <CitationImage
                               key={imgIdx}
-                              href={`/api/v1/documents/image?path=${encodeURIComponent(imgPath)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="block overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] hover:opacity-90 transition"
-                            >
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={`/api/v1/documents/image?path=${encodeURIComponent(imgPath)}`}
-                                alt={`Image from document (page image ${imgIdx + 1})`}
-                                className="h-32 w-full object-cover"
-                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                              />
-                            </a>
+                              path={imgPath}
+                              alt={`Image from document (page image ${imgIdx + 1})`}
+                            />
                           ))}
                         </div>
                       ) : null}
@@ -382,6 +461,29 @@ function ChatPageInner() {
                       {message.role === "assistant" && message.trace ? (
                         <div className="mt-4 border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-text-muted)]">
                           {message.trace.total_latency_ms}ms · {message.trace.retrieved_chunks.length} sources used
+                        </div>
+                      ) : null}
+
+                      {message.role === "assistant" && message.trace?.web_sources?.length ? (
+                        <div className="mt-4 border-t border-[var(--color-border)] pt-3">
+                          <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-[var(--color-text-secondary)]">
+                            <Globe2 className="h-3.5 w-3.5 text-[var(--color-info)]" />
+                            Web sources used for fact-checking
+                          </div>
+                          <div className="space-y-1.5">
+                            {message.trace.web_sources.slice(0, 5).map((source) => (
+                              <a
+                                key={source.url}
+                                href={source.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-start gap-2 rounded-lg px-2 py-1.5 text-xs text-[var(--color-info)] transition hover:bg-[var(--color-surface-100)] hover:underline"
+                              >
+                                <ExternalLink className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                                <span className="line-clamp-2">{source.title || source.url}</span>
+                              </a>
+                            ))}
+                          </div>
                         </div>
                       ) : null}
                     </div>
@@ -393,7 +495,7 @@ function ChatPageInner() {
                           "U"}
                       </div>
                     ) : null}
-                  </motion.button>
+                  </motion.div>
                 ))}
               </AnimatePresence>
 
@@ -439,6 +541,44 @@ function ChatPageInner() {
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-border)] bg-[var(--color-surface-50)] px-4 py-3 text-xs">
+              <div className="flex w-full flex-wrap items-center gap-2">
+                <span className="mr-1 font-semibold text-[var(--color-text-secondary)]">Answer mode:</span>
+                <button
+                  type="button"
+                  onClick={() => setAnswerMode("strict")}
+                  disabled={isStreaming}
+                  aria-pressed={answerMode === "strict"}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 font-semibold transition",
+                    answerMode === "strict"
+                      ? "border-[var(--color-brand-500)]/40 bg-[var(--color-brand-500)]/10 text-[var(--color-brand-700)]"
+                      : "border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-surface-100)]"
+                  )}
+                >
+                  <FileCheck2 className="h-3.5 w-3.5" />
+                  Document only
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAnswerMode("enhanced")}
+                  disabled={isStreaming}
+                  aria-pressed={answerMode === "enhanced"}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 font-semibold transition",
+                    answerMode === "enhanced"
+                      ? "border-[var(--color-info)]/40 bg-[var(--color-info)]/10 text-[var(--color-info)]"
+                      : "border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-surface-100)]"
+                  )}
+                >
+                  <Globe2 className="h-3.5 w-3.5" />
+                  Fact-check &amp; correct
+                </button>
+                <span className="hidden text-[var(--color-text-muted)] sm:inline">
+                  {answerMode === "strict"
+                    ? "Use only the selected document"
+                    : "Compare claims with live web sources"}
+                </span>
+              </div>
               <div className="flex items-center gap-2 text-[var(--color-text-secondary)]">
                 <Database className="h-3.5 w-3.5" />
                 <select
@@ -446,7 +586,9 @@ function ChatPageInner() {
                   onChange={(event) => {
                     setSelectedKbId(event.target.value);
                     setConversationId(null);
+                    setMessages([]);
                     setSelectedTrace(null);
+                    router.push("/dashboard");
                   }}
                   className="bg-transparent outline-none"
                 >

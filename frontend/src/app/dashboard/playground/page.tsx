@@ -24,6 +24,8 @@ type Difficulty = "easy" | "medium" | "hard" | "mixed";
 
 type QuizItem = {
   question: string;
+  options: string[];
+  correct_option: number;
   answer: string;
   source: string;
   difficulty: "easy" | "medium" | "hard" | string;
@@ -39,6 +41,7 @@ type QuizResult = {
 
 type UserAnswer = {
   revealed: boolean;
+  selectedOption: number | null;
   correct: boolean | null; // null = not marked yet
 };
 
@@ -148,14 +151,20 @@ function QuizCard({
   index,
   userAnswer,
   onReveal,
+  onSelect,
+  onSubmit,
   onMark,
 }: {
   item: QuizItem;
   index: number;
   userAnswer: UserAnswer;
   onReveal: () => void;
+  onSelect: (option: number) => void;
+  onSubmit: (option: number) => void;
   onMark: (correct: boolean) => void;
 }) {
+  const options = Array.isArray(item.options) ? item.options : [];
+
   return (
     <div
       style={{
@@ -249,8 +258,124 @@ function QuizCard({
         )}
       </div>
 
-      {/* Answer reveal */}
-      {userAnswer.revealed ? (
+      {/* Multiple-choice interaction */}
+      {options.length >= 2 ? (
+        <div style={{ padding: "16px 20px" }}>
+          <p
+            style={{
+              margin: "0 0 10px",
+              fontSize: "11px",
+              fontWeight: 600,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              color: "var(--color-text-muted)",
+            }}
+          >
+            Choose one answer
+          </p>
+          <div role="radiogroup" aria-label={`Options for question ${index + 1}`} style={{ display: "grid", gap: "8px" }}>
+            {options.map((option, optionIndex) => {
+              const selected = userAnswer.selectedOption === optionIndex;
+              const isCorrect = userAnswer.revealed && item.correct_option === optionIndex;
+              const isWrongSelection = userAnswer.revealed && selected && !isCorrect;
+              return (
+                <button
+                  key={`${optionIndex}-${option}`}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  disabled={userAnswer.revealed}
+                  onClick={() => onSelect(optionIndex)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    width: "100%",
+                    padding: "11px 12px",
+                    borderRadius: "var(--radius-md)",
+                    border: `1px solid ${isCorrect ? "#537a5a80" : isWrongSelection ? "#b54a4a80" : selected ? "var(--color-brand-500)" : "var(--color-border)"}`,
+                    background: isCorrect ? "#537a5a12" : isWrongSelection ? "#b54a4a12" : selected ? "var(--color-brand-100)" : "var(--color-surface-0)",
+                    color: "var(--color-text-secondary)",
+                    fontSize: "13px",
+                    lineHeight: 1.45,
+                    textAlign: "left",
+                    cursor: userAnswer.revealed ? "default" : "pointer",
+                    opacity: userAnswer.revealed && !isCorrect && !isWrongSelection ? 0.72 : 1,
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                      width: "22px",
+                      height: "22px",
+                      borderRadius: "var(--radius-full)",
+                      border: `1px solid ${isCorrect ? "var(--color-success)" : isWrongSelection ? "var(--color-error)" : selected ? "var(--color-brand-600)" : "var(--color-border)"}`,
+                      color: isCorrect ? "var(--color-success)" : isWrongSelection ? "var(--color-error)" : selected ? "var(--color-brand-700)" : "var(--color-text-muted)",
+                      fontSize: "11px",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {String.fromCharCode(65 + optionIndex)}
+                  </span>
+                  <span>{option}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {!userAnswer.revealed ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "14px", marginTop: "14px" }}>
+              <button
+                id={`quiz-check-${index}`}
+                type="button"
+                onClick={() => userAnswer.selectedOption !== null && onSubmit(userAnswer.selectedOption)}
+                disabled={userAnswer.selectedOption === null}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: "var(--radius-md)",
+                  border: "none",
+                  background: userAnswer.selectedOption === null ? "var(--color-surface-300)" : "var(--color-brand-600)",
+                  color: userAnswer.selectedOption === null ? "var(--color-text-muted)" : "#fff",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  cursor: userAnswer.selectedOption === null ? "not-allowed" : "pointer",
+                }}
+              >
+                Check answer
+              </button>
+              <button
+                id={`quiz-reveal-${index}`}
+                type="button"
+                onClick={onReveal}
+                style={{
+                  color: "var(--color-brand-600)",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                Reveal answer
+              </button>
+            </div>
+          ) : (
+            <div style={{ marginTop: "16px" }}>
+              <p style={{ margin: "0 0 8px", fontSize: "13px", fontWeight: 700, color: userAnswer.correct === true ? "var(--color-success)" : userAnswer.correct === false ? "var(--color-error)" : "var(--color-text-secondary)" }}>
+                {userAnswer.correct === true ? "Correct!" : userAnswer.correct === false ? "Not quite" : "Answer revealed"}
+              </p>
+              <p style={{ margin: 0, color: "var(--color-text-secondary)", fontSize: "14px", lineHeight: 1.65 }}>
+                {item.answer}
+              </p>
+            </div>
+          )}
+        </div>
+      ) : userAnswer.revealed ? (
         <div style={{ padding: "16px 20px" }}>
           <p
             style={{
@@ -537,7 +662,7 @@ export default function PlaygroundPage() {
       const response = await apiClient.post<QuizResult>("/playground/quiz", payload);
       setResult(response.data);
       setUserAnswers(
-        response.data.quiz_items.map(() => ({ revealed: false, correct: null }))
+        response.data.quiz_items.map(() => ({ revealed: false, selectedOption: null, correct: null }))
       );
       toast.success(
         `Generated ${response.data.quiz_items.length} questions from ${response.data.chunks_used} context chunks`
@@ -1311,11 +1436,30 @@ export default function PlaygroundPage() {
                 key={index}
                 item={item}
                 index={index}
-                userAnswer={userAnswers[index] ?? { revealed: false, correct: null }}
+                userAnswer={userAnswers[index] ?? { revealed: false, selectedOption: null, correct: null }}
+                onSelect={(option) =>
+                  setUserAnswers((prev) => {
+                    const next = [...prev];
+                    next[index] = { ...next[index], selectedOption: option };
+                    return next;
+                  })
+                }
                 onReveal={() =>
                   setUserAnswers((prev) => {
                     const next = [...prev];
                     next[index] = { ...next[index], revealed: true };
+                    return next;
+                  })
+                }
+                onSubmit={(option) =>
+                  setUserAnswers((prev) => {
+                    const next = [...prev];
+                    next[index] = {
+                      ...next[index],
+                      selectedOption: option,
+                      revealed: true,
+                      correct: option === item.correct_option,
+                    };
                     return next;
                   })
                 }

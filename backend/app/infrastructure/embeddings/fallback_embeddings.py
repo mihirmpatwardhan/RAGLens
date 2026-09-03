@@ -173,7 +173,7 @@ class FallbackEmbeddingProvider(EmbeddingProvider):
     async def embed_query(self, text: str) -> list[float]:
         """Embed a single query string."""
         results = await self.embed_documents([text])
-        return results[0] if results else [0.0] * self._settings.LOCAL_EMBEDDING_DIMENSION
+        return results[0] if results else [0.0] * self.active_dim
 
 
 # ──────────────────────────────────────────────

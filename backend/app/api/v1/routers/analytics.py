@@ -22,14 +22,15 @@ async def get_overview_metrics(
     db: DbSession,
 ):
     """Return real aggregate metrics for the signed-in user's workspace."""
-    import asyncio
-    
     now = datetime.now(UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
-    # Define tasks
-    t_kb = db.execute(
+    # AsyncSession is stateful and cannot safely execute multiple statements
+    # concurrently. Keep these reads on the request's session sequential;
+    # asyncio.gather here causes intermittent concurrent-operation errors with
+    # asyncpg and is not a valid latency optimization.
+    res_kb = await db.execute(
         select(
             func.count(KnowledgeBase.id),
             func.coalesce(func.sum(KnowledgeBase.chunk_count), 0),
@@ -38,25 +39,25 @@ async def get_overview_metrics(
         ).where(KnowledgeBase.owner_id == current_user.id)
     )
 
-    t_docs = db.execute(
+    res_docs = await db.execute(
         select(func.count(Document.id))
         .select_from(Document)
         .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
         .where(KnowledgeBase.owner_id == current_user.id)
     )
 
-    t_convs = db.execute(
+    res_convs = await db.execute(
         select(func.count(Conversation.id)).where(Conversation.user_id == current_user.id)
     )
 
-    t_msgs = db.execute(
+    res_msgs = await db.execute(
         select(func.count(Message.id))
         .select_from(Message)
         .join(Conversation, Message.conversation_id == Conversation.id)
         .where(Conversation.user_id == current_user.id)
     )
 
-    t_assistant = db.execute(
+    res_assistant = await db.execute(
         select(
             func.count(Message.id),
             func.coalesce(func.avg(Message.latency_ms), 0.0),
@@ -74,7 +75,7 @@ async def get_overview_metrics(
         )
     )
 
-    t_today = db.execute(
+    res_today = await db.execute(
         select(func.count(Message.id))
         .select_from(Message)
         .join(Conversation, Message.conversation_id == Conversation.id)
@@ -85,7 +86,7 @@ async def get_overview_metrics(
         )
     )
 
-    t_week = db.execute(
+    res_week = await db.execute(
         select(func.count(Message.id))
         .select_from(Message)
         .join(Conversation, Message.conversation_id == Conversation.id)
@@ -94,10 +95,6 @@ async def get_overview_metrics(
             Message.role == "user",
             Message.created_at >= week_start,
         )
-    )
-
-    res_kb, res_docs, res_convs, res_msgs, res_assistant, res_today, res_week = await asyncio.gather(
-        t_kb, t_docs, t_convs, t_msgs, t_assistant, t_today, t_week
     )
 
     kb_count, total_chunks, storage_used, kb_tokens = res_kb.one()

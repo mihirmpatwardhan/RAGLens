@@ -155,7 +155,7 @@ class Chunk(Base):
         Uuid, primary_key=True, default=uuid.uuid4
     )
     document_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("documents.id"), nullable=False
+        Uuid, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
     )
 
     # Content
@@ -214,7 +214,7 @@ class PipelineRun(Base):
         Uuid, primary_key=True, default=uuid.uuid4
     )
     document_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("documents.id"), nullable=False
+        Uuid, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
     )
 
     status: Mapped[str] = mapped_column(
@@ -267,7 +267,7 @@ class Conversation(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     title: Mapped[str] = mapped_column(String(255), default="New Conversation", nullable=False)
     knowledge_base_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("knowledge_bases.id"), nullable=True
+        Uuid, ForeignKey("knowledge_bases.id", ondelete="SET NULL"), nullable=True
     )
 
     # Settings
@@ -396,3 +396,29 @@ class PromptTemplate(Base):
 
     def __repr__(self) -> str:
         return f"<PromptTemplate {self.name!r}>"
+
+
+class AgentRun(Base):
+    """Ownership record for a multi-agent workflow thread."""
+
+    __tablename__ = "agent_runs"
+    __table_args__ = (
+        Index("ix_agent_runs_owner", "owner_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    thread_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<AgentRun {self.thread_id}>"

@@ -14,6 +14,8 @@ Output format (in `quiz_items` field):
   [
     {
       "question": "...",
+      "options": ["...", "...", "...", "..."],
+      "correct_option": 0,
       "answer": "...",
       "source": "document_name",
       "difficulty": "easy" | "medium" | "hard"
@@ -149,6 +151,10 @@ async def generate_quiz_node(state: QuizState) -> dict:
         "Requirements:\n"
         "- Generate exactly the requested number of questions\n"
         "- Each question must be answerable from the context\n"
+        "- Every question must have exactly 4 plausible multiple-choice options\n"
+        "- Set correct_option to the zero-based index of the one correct option\n"
+        "- Do not reveal the correct option in the question or option labels\n"
+        "- The answer field must be a short explanation shown only after submission\n"
         "- Include the source document for each question\n"
         "- Vary question types (factual, conceptual, analytical)\n"
         "- Return ONLY a valid JSON array — no markdown, no explanations, no code fences\n\n"
@@ -156,6 +162,8 @@ async def generate_quiz_node(state: QuizState) -> dict:
         '[\n'
         '  {\n'
         '    "question": "...",\n'
+        '    "options": ["Option A", "Option B", "Option C", "Option D"],\n'
+        '    "correct_option": 0,\n'
         '    "answer": "...",\n'
         '    "source": "document_name",\n'
         '    "difficulty": "easy" | "medium" | "hard"\n'
@@ -183,9 +191,13 @@ async def generate_quiz_node(state: QuizState) -> dict:
     # Parse JSON response
     quiz_items = []
     try:
-        # Strip potential markdown code fences
+        # Robust JSON array extraction (handles markdown fences, leading/trailing chatter)
         clean = raw_response.strip()
-        if clean.startswith("```"):
+        start_idx = clean.find('[')
+        end_idx = clean.rfind(']')
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            clean = clean[start_idx:end_idx + 1]
+        elif clean.startswith("```"):
             lines = clean.split("\n")
             clean = "\n".join(lines[1:-1]) if len(lines) > 2 else clean
         quiz_items = json.loads(clean)
@@ -196,8 +208,23 @@ async def generate_quiz_node(state: QuizState) -> dict:
         validated = []
         for item in quiz_items:
             if isinstance(item, dict) and "question" in item and "answer" in item:
+                options = item.get("options", [])
+                if not isinstance(options, list):
+                    options = []
+                options = [str(option).strip() for option in options if str(option).strip()]
+
+                correct_option = item.get("correct_option", -1)
+                if isinstance(correct_option, str) and correct_option.strip().isdigit():
+                    correct_option = int(correct_option.strip())
+                if not isinstance(correct_option, int):
+                    correct_option = -1
+                if not 0 <= correct_option < len(options):
+                    correct_option = -1
+
                 validated.append({
                     "question": item.get("question", ""),
+                    "options": options[:4],
+                    "correct_option": correct_option,
                     "answer": item.get("answer", ""),
                     "source": item.get("source", "knowledge base"),
                     "difficulty": item.get("difficulty", "medium"),
@@ -211,6 +238,8 @@ async def generate_quiz_node(state: QuizState) -> dict:
         # Return raw response as a single item for the user to see
         quiz_items = [{
             "question": "Quiz generation returned non-structured output",
+            "options": [],
+            "correct_option": -1,
             "answer": raw_response,
             "source": "system",
             "difficulty": "N/A",

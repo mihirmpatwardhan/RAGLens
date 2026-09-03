@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { apiClient, getErrorMessage } from "@/lib/api-client";
+import type { KnowledgeBase } from "@/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,7 @@ function StatusPill({ status }: { status: WorkflowStatus }) {
 export default function AgentsPage() {
   const [query, setQuery] = useState("");
   const [kbId, setKbId] = useState("");
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [uiStatus, setUiStatus] = useState<WorkflowStatus>("idle");
   const [result, setResult] = useState<WorkflowResult | null>(null);
   const [approving, setApproving] = useState(false);
@@ -95,9 +97,23 @@ export default function AgentsPage() {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [result?.logs]);
 
+  useEffect(() => {
+    void apiClient
+      .get<{ items: KnowledgeBase[] }>("/knowledge-bases?page_size=100")
+      .then(({ data }) => {
+        setKnowledgeBases(data.items ?? []);
+        setKbId((current) => current || data.items?.[0]?.id || "");
+      })
+      .catch((error) => toast.error(getErrorMessage(error)));
+  }, []);
+
   async function handleRun() {
     if (!query.trim()) {
       toast.error("Enter a question first.");
+      return;
+    }
+    if (!kbId) {
+      toast.error("Select a workspace before running the agent.");
       return;
     }
 
@@ -182,12 +198,17 @@ export default function AgentsPage() {
         </label>
 
         <div className="mb-3 flex gap-3">
-          <input
+          <select
+            id="agent-workspace-select"
             value={kbId}
             onChange={(e) => setKbId(e.target.value)}
-            placeholder="Knowledge base UUID (optional)"
             className="w-64 rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-0)] px-4 py-2.5 text-sm outline-none transition focus:border-[var(--color-brand-500)]"
-          />
+          >
+            <option value="">Select workspace</option>
+            {knowledgeBases.map((kb) => (
+              <option key={kb.id} value={kb.id}>{kb.icon} {kb.name}</option>
+            ))}
+          </select>
           <div className="flex-1" />
           <StatusPill status={uiStatus} />
         </div>

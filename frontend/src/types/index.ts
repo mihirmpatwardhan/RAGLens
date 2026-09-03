@@ -158,6 +158,8 @@ export interface Citation {
   content: string;
   page_number?: number;
   score: number;
+  rerank_score?: number | null;
+  image_paths?: string[];
 }
 
 export interface RetrievalTrace {
@@ -175,6 +177,11 @@ export interface RetrievalTrace {
   reranked_chunks?: Array<{
     chunk_id: string;
     score: number;
+  }>;
+  web_sources?: Array<{
+    title: string;
+    url: string;
+    snippet?: string;
   }>;
   context_compressed?: string;
   prompt_tokens: number;

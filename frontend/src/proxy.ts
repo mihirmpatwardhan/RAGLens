@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse, NextFetchEvent } from "next/server";
+import { NextResponse } from "next/server";
 
-export default async function middleware(request: NextRequest, event: NextFetchEvent) {
+export default function middleware() {
   // Add local JWT validation logic here if needed in the future
   return NextResponse.next();
 }

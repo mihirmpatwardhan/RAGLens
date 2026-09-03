@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { Search, Bell, PanelRight, Command } from "lucide-react";
+import { Search, Bell, PanelRight, Command, Menu, X } from "lucide-react";
 import { useThemeStore } from "@/stores/theme-store";
 import { useAppUser } from "@/hooks/use-auth";
 import { AppUserButton } from "@/components/auth/app-user-button";
@@ -25,10 +25,26 @@ const ROUTE_TITLES: Record<string, string> = {
 
 export function Header() {
   const pathname = usePathname();
-  const { setCommandPaletteOpen, rightPanelOpen, toggleRightPanel } = useThemeStore();
+  const {
+    setCommandPaletteOpen,
+    rightPanelOpen,
+    toggleRightPanel,
+    sidebarCollapsed,
+    toggleSidebar,
+    mobileSidebarOpen,
+    toggleMobileSidebar,
+  } = useThemeStore();
   const { user } = useAppUser();
 
   const title = ROUTE_TITLES[pathname] || "RAGLens";
+
+  const toggleNavigation = () => {
+    if (window.matchMedia("(max-width: 767px)").matches) {
+      toggleMobileSidebar();
+    } else {
+      toggleSidebar();
+    }
+  };
 
   // Typewriter placeholder animation
   const [placeholder, setPlaceholder] = useState("Search anything...");
@@ -80,9 +96,22 @@ export function Header() {
   }, [setCommandPaletteOpen]);
 
   return (
-    <header className="h-[var(--header-height)] border-b border-[var(--color-border)] bg-[var(--color-surface-50)]/60 backdrop-blur-2xl flex items-center justify-between px-6 sticky top-0 z-30">
+    <header className="h-[var(--header-height)] border-b border-[var(--color-border)] bg-[var(--color-surface-50)]/60 backdrop-blur-2xl flex items-center justify-between px-3 sm:px-6 sticky top-0 z-30">
       {/* Left: Title */}
       <div className="flex items-center gap-4">
+        <button
+          type="button"
+          aria-label="Toggle navigation"
+          onClick={toggleNavigation}
+          className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-200)]"
+        >
+          <span className="md:hidden">
+            {mobileSidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </span>
+          <span className="hidden md:block">
+            {sidebarCollapsed ? <Menu className="h-5 w-5" /> : <X className="h-5 w-5" />}
+          </span>
+        </button>
         <h1 className="text-base font-bold text-[var(--color-text-primary)] font-display">
           {title}
         </h1>

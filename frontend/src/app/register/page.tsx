@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Brain, CheckCircle2, Loader2, ArrowRight, ShieldAlert } from "lucide-react";
+import { CheckCircle2, Loader2, ArrowRight, ShieldAlert } from "lucide-react";
+import { BrandLogo } from "@/components/common/brand-logo";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores/auth-store";
@@ -56,11 +57,8 @@ export default function RegisterPage() {
 
       {/* Left panel */}
       <section className="hidden lg:flex flex-col justify-between p-12 border-r border-[var(--color-border)] bg-[var(--color-surface-50)]/50 backdrop-blur-md relative z-10">
-        <Link href="/" className="flex items-center gap-3 w-fit">
-          <span className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[var(--color-brand-600)] to-[var(--color-accent-500)] text-white flex items-center justify-center shadow-lg">
-            <Brain className="w-5 h-5" />
-          </span>
-          <span className="font-display text-xl font-bold tracking-tight">RAGLens</span>
+        <Link href="/" className="flex w-fit items-center gap-3">
+          <BrandLogo className="h-14 w-48" />
         </Link>
 
         <div className="max-w-lg">
@@ -95,11 +93,8 @@ export default function RegisterPage() {
       {/* Right panel / Form */}
       <section className="flex items-center justify-center px-6 py-12 relative z-10">
         <div className="w-full max-w-md">
-          <div className="lg:hidden flex items-center gap-3 mb-8">
-            <span className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[var(--color-brand-600)] to-[var(--color-accent-500)] text-white flex items-center justify-center shadow-lg">
-              <Brain className="w-5 h-5" />
-            </span>
-            <span className="font-display text-xl font-bold tracking-tight">RAGLens</span>
+          <div className="mb-8 flex items-center justify-center lg:hidden">
+            <BrandLogo className="h-16 w-64" />
           </div>
 
             <div className="rounded-3xl border border-[var(--color-border)] bg-[var(--color-surface-50)]/90 backdrop-blur-xl p-8 shadow-2xl space-y-6">

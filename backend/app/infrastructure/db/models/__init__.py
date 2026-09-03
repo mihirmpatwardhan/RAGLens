@@ -1,5 +1,6 @@
 # DB models package
 from app.infrastructure.db.models.knowledge import (
+    AgentRun,
     Chunk,
     Conversation,
     Document,
@@ -21,4 +22,5 @@ __all__ = [
     "Message",
     "KnowledgeBaseMember",
     "PromptTemplate",
+    "AgentRun",
 ]

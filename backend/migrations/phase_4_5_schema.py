@@ -7,6 +7,8 @@ Adds the following columns to support multimodal content and temporal memory:
   - chunks.content_type      VARCHAR(20) DEFAULT 'text' NOT NULL
 
 Also creates the knowledge_base_members table for RBAC (Phase 6).
+Also creates the agent_runs table so agent thread IDs remain scoped to their
+authenticated owner and knowledge base (Phase 7 security hardening).
 
 Usage:
     cd backend
@@ -84,6 +86,22 @@ MIGRATIONS = [
     """
     CREATE INDEX IF NOT EXISTS ix_kb_members_user_id ON knowledge_base_members(user_id);
     """,
+    # Agent workflow ownership and KB scope
+    """
+    CREATE TABLE IF NOT EXISTS agent_runs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        thread_id VARCHAR(128) NOT NULL UNIQUE,
+        owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_agent_runs_owner ON agent_runs(owner_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_agent_runs_thread_id ON agent_runs(thread_id);
+    """,
 ]
 
 # SQLite equivalents (no DO $$ blocks, no gen_random_uuid())
@@ -105,6 +123,17 @@ SQLITE_MIGRATIONS = [
     """,
     "CREATE INDEX IF NOT EXISTS ix_kb_members_kb_id ON knowledge_base_members(knowledge_base_id)",
     "CREATE INDEX IF NOT EXISTS ix_kb_members_user_id ON knowledge_base_members(user_id)",
+    """
+    CREATE TABLE IF NOT EXISTS agent_runs (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL UNIQUE,
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        knowledge_base_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_agent_runs_owner ON agent_runs(owner_id)",
+    "CREATE INDEX IF NOT EXISTS ix_agent_runs_thread_id ON agent_runs(thread_id)",
 ]
 
 

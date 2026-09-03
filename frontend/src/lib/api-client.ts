@@ -4,7 +4,6 @@ const configuredApiUrl = typeof window !== "undefined"
   ? ""
   : (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
 const API_BASE_URL = configuredApiUrl;
-const directApiOrigin = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
 
 type AuthTokenProvider = () => Promise<string | null>;
 
@@ -66,16 +65,13 @@ function createApiClient(): AxiosInstance {
 /**
  * Dedicated Axios instance for file uploads.
  * Uses a 5-minute timeout because large PDF/audio/video uploads can easily
- * take several minutes on slow connections. The default 30 s timeout causes
- * spurious "timeout exceeded" errors that users are seeing.
+ * take several minutes on slow connections. When no public backend origin is
+ * configured, keep this same-origin so hosted deployments do not target the
+ * user's localhost.
  */
 function createUploadClient(): AxiosInstance {
-  // Use the direct backend URL for file uploads to bypass Next.js rewrites,
-  // which can buffer large files or timeout, causing 500 errors.
-  const directBackendUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
-  
   const client = axios.create({
-    baseURL: `${directBackendUrl}/api/v1`,
+    baseURL: `${API_BASE_URL}/api/v1`,
     timeout: 300000, // 5 minutes
     headers: {
       "Content-Type": "multipart/form-data",
@@ -89,9 +85,10 @@ function createUploadClient(): AxiosInstance {
 export const apiClient = createApiClient();
 export const uploadClient = createUploadClient();
 
-// Streaming responses bypass the Next.js rewrite, which can buffer SSE output.
+// Use a direct backend only when explicitly configured (or during server-side
+// execution). Otherwise return a same-origin URL for hosted deployments.
 export function getStreamingApiUrl(path: string): string {
-  return `${directApiOrigin}/api/v1${path.startsWith("/") ? path : `/${path}`}`;
+  return `${API_BASE_URL}/api/v1${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 export function getErrorMessage(error: unknown): string {

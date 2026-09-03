@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     API_PREFIX: str = "/api/v1"
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    # Default system prompt used by the /playground/run endpoint.
+    PLAYGROUND_DEFAULT_SYSTEM_PROMPT: str = "You are a helpful AI assistant."
 
     # ──────────────────────────────────────────────
     # Database (SQLite default, can be overridden by env DATABASE_URL)
@@ -157,6 +159,8 @@ class Settings(BaseSettings):
     # 0 processes every scanned page; use a positive value only to cap OCR work.
     PDF_MAX_OCR_PAGES: int = 0
     PDF_OCR_DPI: int = 200
+    # Language codes passed to EasyOCR. Extend this list for multilingual documents.
+    PDF_OCR_LANGUAGES: list[str] = ["en"]
 
     # ──────────────────────────────────────────────
     # Retrieval
@@ -174,6 +178,13 @@ class Settings(BaseSettings):
     # Minimum cosine similarity score below which CriticAgent flags results for human review.
     # Set to 0.0 to disable HITL interrupts (critic always approves).
     CRITIC_MIN_SCORE: float = 0.3
+    # Relevance thresholds for the retrieval pipeline's post-reranking filter.
+    # Cross-encoder scores below MIN_RERANK_SCORE are dropped as irrelevant.
+    MIN_RERANK_SCORE: float = -4.0
+    # Cosine similarity scores below MIN_COSINE_SCORE are dropped when the cross-encoder is disabled.
+    MIN_COSINE_SCORE: float = 0.25
+    # Number of web results fetched by DuckDuckGo in enhanced (fact-check) answer mode.
+    WEB_SEARCH_MAX_RESULTS: int = 3
 
 
     # ──────────────────────────────────────────────

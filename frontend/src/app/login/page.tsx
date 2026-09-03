@@ -7,7 +7,8 @@ import { apiClient, getErrorMessage } from "@/lib/api-client";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Brain, Eye, EyeOff, Loader2, ShieldAlert } from "lucide-react";
+import { Eye, EyeOff, Loader2, ShieldAlert } from "lucide-react";
+import { BrandLogo } from "@/components/common/brand-logo";
 import Link from "next/link";
 import toast from "react-hot-toast";
 
@@ -58,13 +59,8 @@ function LoginForm() {
 
       <div className="relative z-10 w-full max-w-md">
         {/* Logo */}
-        <div className="flex items-center justify-center gap-3 mb-8">
-          <span className="w-10 h-10 rounded-xl bg-[var(--color-brand-600)] text-white flex items-center justify-center shadow-md">
-            <Brain className="w-5 h-5" />
-          </span>
-          <span className="font-display text-xl font-bold tracking-tight text-[var(--color-text-primary)]">
-            RAGLens
-          </span>
+        <div className="mb-8 flex items-center justify-center">
+          <BrandLogo className="h-16 w-64" />
         </div>
 
         {/* Card */}

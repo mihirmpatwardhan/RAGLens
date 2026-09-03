@@ -92,18 +92,20 @@ async def rewrite_query_node(state: AgentState) -> dict:
 
 async def retrieve_chunks_node(state: AgentState) -> dict:
     """Perform vector search scoped to the knowledge base."""
-    from app.infrastructure.embeddings.fallback_embeddings import FallbackEmbeddingProvider
+    from app.infrastructure.embeddings.fallback_embeddings import get_embedding_provider
     from app.infrastructure.vector_stores import get_vector_store
 
     logs = list(state.get("agent_logs", []))
     logs.append("RetrieverAgent: Searching vector database...")
 
-    embedding_provider = FallbackEmbeddingProvider()
+    embedding_provider = get_embedding_provider()
     vector_store = get_vector_store()
     query = state.get("query_rewritten") or state["query"]
     kb_id = state.get("kb_id")
     active_dim = embedding_provider.active_dim
-    collection_name = f"kb_{kb_id}_dim{active_dim}" if kb_id else settings.CHROMA_COLLECTION_NAME
+    # Do not query the legacy process-wide collection when a workspace is
+    # missing; it may contain documents owned by another user.
+    collection_name = f"kb_{kb_id}_dim{active_dim}" if kb_id else "__workspace_required__"
 
     try:
         query_vector = await embedding_provider.embed_query(query)
@@ -188,7 +190,7 @@ async def critic_node(state: AgentState) -> dict:
 
 async def generate_response_node(state: AgentState) -> dict:
     """Synthesize the final response using the LLM fallback chain."""
-    from app.infrastructure.llm import FallbackLLMProvider
+    from app.infrastructure.llm import get_llm_provider
 
     logs = list(state.get("agent_logs", []))
 
@@ -223,7 +225,7 @@ async def generate_response_node(state: AgentState) -> dict:
     )
     user_prompt = f"Context:\n{context}\n\nQuestion: {query}\n\nAnswer based on the context above:"
 
-    llm = FallbackLLMProvider()
+    llm = get_llm_provider()
     answer = await llm.complete(system_prompt=system_prompt, user_prompt=user_prompt)
     logs.append(f"GeneratorAgent: Response generated ({len(answer)} chars).")
 

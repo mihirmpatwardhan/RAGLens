@@ -24,7 +24,12 @@ from app.api.v1.schemas.knowledge import (
     MessageResponse,
     SendMessageRequest,
 )
-from app.application.retrieval.pipeline import RetrievalPipeline, _RAG_SYSTEM_PROMPT, _RAG_USER_TEMPLATE
+from app.application.retrieval.pipeline import (
+    RetrievalPipeline,
+    _RAG_SYSTEM_PROMPT_STRICT,
+    _RAG_SYSTEM_PROMPT_ENHANCED,
+    _RAG_USER_TEMPLATE,
+)
 from app.core.config import get_settings
 from app.infrastructure.db.models.knowledge import Conversation, Message
 
@@ -187,13 +192,16 @@ async def send_message(
             raise HTTPException(status_code=403, detail="Not authorized to access this knowledge base")
 
     # 2. Load conversation history BEFORE saving current message (last 10 msgs = 5 turns)
+    # Bug fix: was using .asc().limit(10) which fetched the FIRST 10 messages of all time,
+    # not the most recent 10. For long conversations this gave the LLM stale old context.
+    # Fix: fetch most-recent 10 descending, then reverse to chronological order for the LLM.
     history_result = await db.execute(
         select(Message)
         .where(Message.conversation_id == conv_id)
-        .order_by(Message.created_at.asc())
+        .order_by(Message.created_at.desc())
         .limit(10)
     )
-    prior_messages = history_result.scalars().all()
+    prior_messages = list(reversed(history_result.scalars().all()))
     conversation_history = [
         {"role": m.role, "content": m.content}
         for m in prior_messages
@@ -219,11 +227,17 @@ async def send_message(
         token_count = 0
         last_keepalive = time.time()
 
-        yield 'event: status\ndata: {"message": "Searching your workspace..."}\n\n'
+        status_message = (
+            "Searching your workspace and checking claims against web sources..."
+            if request.answer_mode == "enhanced"
+            else "Searching your workspace..."
+        )
+        yield f"event: status\ndata: {json.dumps({'message': status_message})}\n\n"
         try:
             retrieval_res = await pipeline.retrieve_and_generate_context(
                 request.content,
                 conversation_history=conversation_history,
+                answer_mode=request.answer_mode,
             )
         except Exception as retrieval_exc:
             logger.exception("Retrieval pipeline failed: %s", retrieval_exc)
@@ -247,8 +261,14 @@ async def send_message(
                 "citations": [],
             }
 
-        # Emit trace once retrieval has completed so the inspector has full data.
-        yield f"event: trace\ndata: {json.dumps(retrieval_res['trace'])}\n\n"
+        # Emit citations together with the trace.  The UI needs the citation
+        # metadata (including extracted image paths) before the answer tokens
+        # arrive in order to render relevant document figures inline.
+        trace_payload = {
+            **retrieval_res["trace"],
+            "citations": retrieval_res.get("citations", []),
+        }
+        yield f"event: trace\ndata: {json.dumps(trace_payload)}\n\n"
 
         try:
             import litellm  # type: ignore[import-untyped]
@@ -258,11 +278,18 @@ async def send_message(
 
             user_prompt = retrieval_res["user_prompt"]
 
+            # Select correct system prompt based on mode
+            active_system_prompt = (
+                _RAG_SYSTEM_PROMPT_ENHANCED
+                if request.answer_mode == "enhanced"
+                else _RAG_SYSTEM_PROMPT_STRICT
+            )
+
             # Build full multi-turn messages for the LLM:
             # [system] + [prior history] + [current user RAG prompt]
             # This gives the LLM the full conversation context for accurate follow-ups.
             history_msgs = retrieval_res.get("history_messages", [])
-            llm_messages = [{"role": "system", "content": _RAG_SYSTEM_PROMPT}]
+            llm_messages = [{"role": "system", "content": active_system_prompt}]
             # Inject prior turns (without the last user message since it's in user_prompt)
             for h_msg in history_msgs:
                 llm_messages.append({"role": h_msg["role"], "content": h_msg["content"]})
@@ -389,11 +416,9 @@ async def send_message(
             except Exception as db_exc:
                 logger.error("Failed to persist assistant message: %s", db_exc)
 
-        import asyncio
-        # create_task schedules the DB save as a background task — runs after
-        # SSE stream ends without blocking the generator or leaking coroutines.
-        asyncio.create_task(_save_db())
-
+        # Await DB persistence before emitting done event so the message is
+        # guaranteed to be in the database when the client receives done.
+        await _save_db()
 
         yield "event: done\ndata: {}\n\n"
 

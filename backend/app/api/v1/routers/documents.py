@@ -569,6 +569,56 @@ async def list_documents(
 
 
 @router.get(
+    "/image",
+    summary="Serve an extracted document image",
+    response_class=FileResponse,
+)
+async def serve_document_image(
+    current_user: CurrentUser,
+    db: DbSession,
+    path: str = Query(..., description="Absolute path to the extracted image file"),
+):
+    """Serve an extracted image after validating storage and KB access."""
+    storage_root = Path(settings.STORAGE_LOCAL_PATH).resolve()
+    requested_path = Path(path).resolve()
+
+    try:
+        requested_path.relative_to(storage_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied: path outside storage root")
+
+    # Assets are stored below <storage>/<knowledge-base-id>/..., so authorize
+    # the caller against that KB before serving the file.
+    relative_parts = requested_path.relative_to(storage_root).parts
+    if not relative_parts:
+        raise HTTPException(status_code=404, detail="Image not found")
+    try:
+        image_kb_id = uuid.UUID(relative_parts[0])
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if await get_kb_role(image_kb_id, current_user, db) is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    if not requested_path.exists() or not requested_path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    media_type = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".tiff": "image/tiff",
+        ".bmp": "image/bmp",
+    }.get(requested_path.suffix.lower(), "application/octet-stream")
+    return FileResponse(
+        path=str(requested_path),
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+@router.get(
     "/{doc_id}",
     response_model=DocumentResponse,
     summary="Get a document",
@@ -630,6 +680,14 @@ async def delete_document(
     if storage_path.exists():
         storage_path.unlink()
         logger.info(f"Deleted storage file: {storage_path}")
+    # Extracted PDF assets live in a document-specific directory. Remove it
+    # together with the source file so deleted documents do not leave images
+    # behind in storage.
+    extracted_images_dir = storage_path.parent / "images" / storage_path.stem
+    if extracted_images_dir.exists() and extracted_images_dir.is_dir():
+        import shutil
+        shutil.rmtree(extracted_images_dir)
+        logger.info(f"Deleted extracted images: {extracted_images_dir}")
 
     # 2. Update KB stats (moved up to get vector_dimension for cleanup)
     kb_result = await db.execute(
@@ -659,6 +717,8 @@ async def delete_document(
     if kb:
         kb.document_count = max(0, (kb.document_count or 1) - 1)
         kb.storage_bytes = max(0, (kb.storage_bytes or doc.file_size) - doc.file_size)
+        kb.chunk_count = max(0, (kb.chunk_count or doc.chunk_count) - (doc.chunk_count or 0))
+        kb.total_tokens = max(0, (kb.total_tokens or doc.token_count) - (doc.token_count or 0))
 
     # 4. Delete document (cascades to chunks and pipeline runs via ORM)
     await db.delete(doc)
@@ -703,49 +763,3 @@ async def get_pipeline_status(
         raise HTTPException(status_code=404, detail="No pipeline execution found for this document")
 
     return PipelineRunResponse.model_validate(run)
-
-
-@router.get(
-    "/image",
-    summary="Serve an extracted document image",
-    response_class=FileResponse,
-)
-async def serve_document_image(
-    path: str = Query(..., description="Absolute path to the extracted image file"),
-    current_user: CurrentUser = None,
-):
-    """Serve an extracted image file (e.g. from PDF image extraction).
-
-    The path must be within the configured STORAGE_LOCAL_PATH to prevent
-    directory traversal attacks.
-    """
-    storage_root = Path(settings.STORAGE_LOCAL_PATH).resolve()
-    requested_path = Path(path).resolve()
-
-    # Security: ensure the image is within the storage directory
-    try:
-        requested_path.relative_to(storage_root)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Access denied: path outside storage root")
-
-    if not requested_path.exists() or not requested_path.is_file():
-        raise HTTPException(status_code=404, detail="Image not found")
-
-    # Determine MIME type from extension
-    ext = requested_path.suffix.lower()
-    mime_map = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".tiff": "image/tiff",
-        ".bmp": "image/bmp",
-    }
-    media_type = mime_map.get(ext, "application/octet-stream")
-
-    return FileResponse(
-        path=str(requested_path),
-        media_type=media_type,
-        headers={"Cache-Control": "public, max-age=3600"},
-    )

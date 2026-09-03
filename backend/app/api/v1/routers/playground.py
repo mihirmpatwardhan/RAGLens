@@ -15,8 +15,13 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.api.v1.deps import CurrentUser, DbSession
+from app.core.config import get_settings
 
 router = APIRouter(prefix="/playground", tags=["Playground"])
+settings = get_settings()
+
+# Default system prompt for the /run endpoint — overridable via PLAYGROUND_DEFAULT_SYSTEM_PROMPT env var.
+_DEFAULT_SYSTEM_PROMPT: str = settings.PLAYGROUND_DEFAULT_SYSTEM_PROMPT
 
 
 # ──────────────────────────────────────────────
@@ -44,6 +49,8 @@ class QuizGenerateRequest(BaseModel):
 
 class QuizItem(BaseModel):
     question: str
+    options: list[str] = Field(default_factory=list)
+    correct_option: int = -1
     answer: str
     source: str
     difficulty: str
@@ -112,6 +119,8 @@ async def generate_quiz_endpoint(
         quiz_items=[
             QuizItem(
                 question=item.get("question", ""),
+                options=item.get("options", []),
+                correct_option=item.get("correct_option", -1),
                 answer=item.get("answer", ""),
                 source=item.get("source", "knowledge base"),
                 difficulty=item.get("difficulty", "medium"),
@@ -137,12 +146,12 @@ class PlaygroundRunRequest(BaseModel):
         description="The user prompt to send to the model.",
     )
     system_prompt: str = Field(
-        default="You are a helpful AI assistant.",
+        default=_DEFAULT_SYSTEM_PROMPT,
         max_length=8000,
         description="Optional system prompt / persona.",
     )
     model: str = Field(
-        default="gpt-4o",
+        default=settings.DEFAULT_LLM_MODEL,
         description="Model identifier (e.g. gpt-4o, claude-3-5-sonnet-20241022).",
     )
     temperature: float = Field(
@@ -191,7 +200,10 @@ def _estimate_cost(model: str, total_tokens: int) -> float:
     response_model=PlaygroundRunResponse,
     summary="Execute a prompt against a configurable model",
 )
-async def run_prompt(request: PlaygroundRunRequest) -> PlaygroundRunResponse:
+async def run_prompt(
+    request: PlaygroundRunRequest,
+    _current_user: CurrentUser,
+) -> PlaygroundRunResponse:
     """
     Execute a raw prompt through the LLM fallback chain.
 
@@ -218,7 +230,6 @@ async def run_prompt(request: PlaygroundRunRequest) -> PlaygroundRunResponse:
             max_tokens_override=request.max_tokens,
         )
     except Exception as exc:
-        from fastapi import HTTPException, status
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"LLM provider error: {exc}",

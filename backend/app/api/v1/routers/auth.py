@@ -82,6 +82,12 @@ async def login(
             detail="Incorrect email or password",
         )
 
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is deactivated",
+        )
+
     # Generate custom access token
     access_token = create_access_token(subject=str(user.id))
     logger.info(f"User {payload.email} logged in successfully.")
@@ -90,4 +96,3 @@ async def login(
         token_type="bearer",
         user=UserResponse.model_validate(user),
     )
-

@@ -33,6 +33,9 @@ from app.infrastructure.vector_stores import get_vector_store
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Minimum byte size for embedded PDF images — smaller ones are typically icons/decorations.
+_PDF_MIN_IMAGE_BYTES: int = 5_000
+
 
 class IngestionPipeline:
     """Manages the execution and observability of the document ingestion pipeline."""
@@ -53,6 +56,8 @@ class IngestionPipeline:
         self._audio_segments: list = []
         # Images extracted from PDFs (list of {page, path, filename} dicts)
         self._pdf_images: list[dict] = []
+        # Page-aware text used when layout parsing is disabled.
+        self._pdf_page_texts: dict[int, str] = {}
 
     async def execute(self) -> None:
         """Run the ingestion pipeline stages sequentially."""
@@ -127,6 +132,7 @@ class IngestionPipeline:
             doc.status = "ready"
             doc.chunk_count = len(chunks)
             doc.token_count = sum(len(c["text"].split()) for c in chunks)
+            doc.image_count = len(self._pdf_images)
             await self.db.flush()
 
             logger.info(
@@ -205,13 +211,19 @@ class IngestionPipeline:
         mime = doc.mime_type
 
         try:
-            if mime == "application/pdf" and settings.ENABLE_LAYOUT_PARSER:
-                text = await self._extract_pdf_layout(storage_path)
-            elif mime == "application/pdf":
-                text = await self._extract_pdf(storage_path)
-                # Also extract embedded images from PDF in background (non-blocking)
+            if mime == "application/pdf":
+                # Extract images independently of the text parser. The layout-aware
+                # parser is enabled by default, so doing this only in the flat-PDF
+                # branch silently lost figures and diagrams for most PDFs.
                 storage_dir = storage_path.parent
                 self._pdf_images = self._extract_pdf_images(storage_path, storage_dir)
+                if settings.ENABLE_LAYOUT_PARSER:
+                    text = await self._extract_pdf_layout(storage_path)
+                    self._pdf_images.extend(
+                        self._persist_layout_images(storage_dir, storage_path.stem)
+                    )
+                else:
+                    text = await self._extract_pdf(storage_path)
             elif mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
                 text = await self._extract_docx(storage_path)
             elif mime in ("text/plain", "text/markdown", "text/csv", "text/tab-separated-values",
@@ -245,7 +257,8 @@ class IngestionPipeline:
         Populates self._audio_segments for timestamp-aware chunking.
         Returns joined transcript text for stage tracking.
         """
-        "video" if mime.startswith("video/") else "audio"
+        content_type = "video" if mime.startswith("video/") else "audio"
+        logger.debug("Transcribing %s file: %s", content_type, path.name)
         try:
             from app.infrastructure.ingestion.audio_ingestion import transcribe_audio
             self._audio_segments = await transcribe_audio(path)
@@ -320,12 +333,16 @@ class IngestionPipeline:
             import fitz
             image_infos: list[dict] = []
             doc = fitz.open(str(path))
-            img_dir = storage_dir / "images"
+            # Keep each document's extracted assets isolated. The old shared
+            # directory caused same-named page images from different PDFs to
+            # overwrite one another.
+            img_dir = storage_dir / "images" / path.stem
             img_dir.mkdir(parents=True, exist_ok=True)
 
             for page_num in range(len(doc)):
                 page = doc[page_num]
                 image_list = page.get_images(full=True)
+                extracted_from_page = False
                 for img_idx, img in enumerate(image_list):
                     xref = img[0]
                     try:
@@ -333,7 +350,7 @@ class IngestionPipeline:
                         img_bytes = base_image["image"]
                         ext = base_image.get("ext", "png")
                         # Skip very small images (icons, decorations)
-                        if len(img_bytes) < 5000:
+                        if len(img_bytes) < _PDF_MIN_IMAGE_BYTES:
                             continue
                         img_filename = f"page{page_num + 1}_img{img_idx}.{ext}"
                         img_path = img_dir / img_filename
@@ -344,8 +361,36 @@ class IngestionPipeline:
                             "filename": img_filename,
                             "size_bytes": len(img_bytes),
                         })
+                        extracted_from_page = True
                     except Exception as img_exc:
                         logger.debug("Could not extract image xref=%d: %s", xref, img_exc)
+
+                # Diagrams/charts are often PDF vector drawings, so they do not
+                # appear in page.get_images(). Keep a page preview for those
+                # pages so the user can still see the relevant figure.
+                if not extracted_from_page:
+                    try:
+                        if page.get_drawings():
+                            preview = page.get_pixmap(
+                                matrix=fitz.Matrix(1.5, 1.5),
+                                alpha=False,
+                            )
+                            preview_filename = f"page{page_num + 1}_preview.png"
+                            preview_path = img_dir / preview_filename
+                            preview.save(str(preview_path))
+                            image_infos.append({
+                                "page": page_num + 1,
+                                "path": str(preview_path),
+                                "filename": preview_filename,
+                                "size_bytes": preview_path.stat().st_size,
+                                "kind": "page_preview",
+                            })
+                    except Exception as preview_exc:
+                        logger.debug(
+                            "Could not render vector preview for page %d: %s",
+                            page_num + 1,
+                            preview_exc,
+                        )
             doc.close()
             if image_infos:
                 logger.info(
@@ -357,74 +402,50 @@ class IngestionPipeline:
             logger.debug("Image extraction skipped: %s", exc)
             return []
 
+    def _persist_layout_images(self, storage_dir: Path, document_stem: str) -> list[dict]:
+        """Persist figure bytes returned by the layout parser as browser-safe PNGs."""
+        if not self._layout_elements:
+            return []
+
+        try:
+            from io import BytesIO
+
+            from PIL import Image
+        except ImportError:
+            logger.debug("Pillow is unavailable; skipping layout image persistence")
+            return []
+
+        image_infos: list[dict] = []
+        image_dir = storage_dir / "images" / document_stem
+        layout_index = 0
+        for element in self._layout_elements:
+            image_bytes = getattr(element, "image_bytes", None)
+            if getattr(element, "content_type", None) != "image" or not image_bytes:
+                continue
+
+            try:
+                image = Image.open(BytesIO(image_bytes))
+                image.load()
+                image_filename = f"page{element.page_number}_layout_img{layout_index}.png"
+                image_path = image_dir / image_filename
+                image_dir.mkdir(parents=True, exist_ok=True)
+                image.convert("RGBA").save(image_path, format="PNG")
+                image_infos.append({
+                    "page": element.page_number,
+                    "path": str(image_path),
+                    "filename": image_filename,
+                    "size_bytes": image_path.stat().st_size,
+                })
+                layout_index += 1
+            except Exception as exc:
+                logger.debug("Could not persist layout image: %s", exc)
+
+        return image_infos
+
     async def _extract_pdf(self, path: Path) -> str:
         """Extract text from PDF using pymupdf (fitz), page-by-page with memory management."""
-        return "\n\n".join((await self._extract_pdf_pages(path)).values())
-
-        import fitz  # pymupdf
-        text_parts = []
-        BATCH_SIZE = 20  # Process in batches of 20 pages to limit peak memory
-
-        doc = fitz.open(str(path))
-        total_pages = len(doc)
-        logger.info("Extracting PDF: %d pages from '%s'", total_pages, path.name)
-
-        for page_num in range(total_pages):
-            page = doc[page_num]
-            page_text = page.get_text("text")
-            if page_text.strip():
-                text_parts.append(page_text)
-
-            # Yield control every BATCH_SIZE pages to avoid blocking event loop
-            if (page_num + 1) % BATCH_SIZE == 0:
-                logger.debug("PDF extraction progress: %d/%d pages", page_num + 1, total_pages)
-
-        doc.close()
-
-        if not text_parts:
-            # Fallback to pdfplumber for scanned PDFs
-            try:
-                import pdfplumber
-                logger.info("Trying pdfplumber for '%s'", path.name)
-                with pdfplumber.open(str(path)) as pdf:
-                    for page in pdf.pages:
-                        page_text = page.extract_text() or ""
-                        if page_text.strip():
-                            text_parts.append(page_text)
-            except Exception as e:
-                logger.warning("pdfplumber fallback also failed: %s", e)
-
-        if not text_parts:
-            # Final fallback: OCR using EasyOCR for fully scanned/image-based PDFs
-            # Process in small batches to avoid memory exhaustion on large files
-            try:
-                import easyocr
-                import fitz
-                logger.info("Falling back to EasyOCR for scanned PDF: '%s'", path.name)
-                # Suppress verbose easyocr logs
-                reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-                doc = fitz.open(str(path))
-                total_pages = len(doc)
-                MAX_OCR_PAGES = 50  # Safety limit — OCR is very slow
-                if total_pages > MAX_OCR_PAGES:
-                    logger.warning(
-                        "PDF has %d pages — OCR limited to first %d pages to avoid timeout.",
-                        total_pages, MAX_OCR_PAGES,
-                    )
-                for page_idx in range(min(total_pages, MAX_OCR_PAGES)):
-                    page = doc[page_idx]
-                    # Render at 150 DPI — balance quality vs memory
-                    pix = page.get_pixmap(dpi=150)
-                    img_bytes = pix.tobytes("png")
-                    pix = None  # Free immediately
-                    result = reader.readtext(img_bytes, detail=0)
-                    if result:
-                        text_parts.append(" ".join(result))
-                doc.close()
-            except Exception as e:
-                logger.warning("EasyOCR fallback failed: %s", e)
-
-        return "\n\n".join(text_parts)
+        self._pdf_page_texts = await self._extract_pdf_pages(path)
+        return "\n\n".join(self._pdf_page_texts.values())
 
     async def _extract_pdf_pages(self, path: Path) -> dict[int, str]:
         """Return text by page, applying OCR only to pages with sparse native text."""
@@ -481,7 +502,7 @@ class IngestionPipeline:
             import easyocr
 
             logger.info("Running OCR on %d scanned pages from '%s'", len(pages_to_ocr), path.name)
-            reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+            reader = easyocr.Reader(settings.PDF_OCR_LANGUAGES, gpu=False, verbose=False)
             document = fitz.open(str(path))
             try:
                 for page_number in pages_to_ocr:
@@ -541,10 +562,10 @@ class IngestionPipeline:
         """Group audio/video transcript segments into ~60s timed chunks."""
         from app.infrastructure.ingestion.audio_ingestion import segments_to_chunks
 
-        # Infer content_type from MIME stored on segments
-        content_type = "audio"
-        if self._audio_segments and hasattr(self._audio_segments[0], "language"):
-            pass  # keep "audio" as default
+        # Infer content_type from the first segment's type attribute if available,
+        # otherwise default to "audio".
+        first = self._audio_segments[0] if self._audio_segments else None
+        content_type = getattr(first, "content_type", "audio")
 
         chunks = segments_to_chunks(
             self._audio_segments,
@@ -568,30 +589,41 @@ class IngestionPipeline:
             separators=["\n\n", "\n", ". ", " ", ""],
         )
 
-        text_chunks = splitter.split_text(self._extracted_text)
-
         chunks = []
+        # Preserve PDF page numbers even when ENABLE_LAYOUT_PARSER is false.
+        # Without this, every chunk was marked as page 1 and only page-1
+        # figures could ever be associated with a retrieved answer.
+        source_parts = (
+            list(self._pdf_page_texts.items())
+            if self._pdf_page_texts
+            else [(1, self._extracted_text)]
+        )
+        idx = 0
         char_offset = 0
-        for idx, chunk_text in enumerate(text_chunks):
-            start_char = self._extracted_text.find(chunk_text, char_offset)
-            if start_char == -1:
-                start_char = char_offset
-            end_char = start_char + len(chunk_text)
-            char_offset = start_char + 1
+        for page_number, page_text in source_parts:
+            if not page_text.strip():
+                continue
+            for chunk_text in splitter.split_text(page_text):
+                start_char = self._extracted_text.find(chunk_text, char_offset)
+                if start_char == -1:
+                    start_char = char_offset
+                end_char = start_char + len(chunk_text)
+                char_offset = start_char + 1
 
-            chunks.append({
-                "id": str(uuid.uuid4()),  # pre-assign ID (matches layout chunker convention)
-                "index": idx,
-                "text": chunk_text,
-                "content_type": "text",
-                "start_char": start_char,
-                "end_char": end_char,
-                "token_count": len(chunk_text.split()),
-                "char_count": len(chunk_text),
-                "page_number": 1,
-                "section_title": None,
-                "parent_chunk_id": None,
-            })
+                chunks.append({
+                    "id": str(uuid.uuid4()),  # pre-assign ID (matches layout chunker convention)
+                    "index": idx,
+                    "text": chunk_text,
+                    "content_type": "text",
+                    "start_char": start_char,
+                    "end_char": end_char,
+                    "token_count": len(chunk_text.split()),
+                    "char_count": len(chunk_text),
+                    "page_number": page_number,
+                    "section_title": None,
+                    "parent_chunk_id": None,
+                })
+                idx += 1
 
         logger.info(f"Chunking produced {len(chunks)} chunks (size={settings.DEFAULT_CHUNK_SIZE}, overlap={settings.DEFAULT_CHUNK_OVERLAP})")
         return chunks
@@ -687,8 +719,8 @@ class IngestionPipeline:
                 section_title=chunk.get("section_title"),
                 start_char=chunk.get("start_char"),
                 end_char=chunk.get("end_char"),
-                embedding_model=settings.DEFAULT_EMBEDDING_MODEL,
-                embedding_dimension=settings.DEFAULT_EMBEDDING_DIMENSION,
+                embedding_model=active_model,
+                embedding_dimension=active_dim,
                 vector_id=str(chunk_id),
                 token_count=chunk.get("token_count", 0),
                 char_count=chunk.get("char_count", 0),

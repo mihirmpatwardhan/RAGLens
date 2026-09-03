@@ -49,7 +49,10 @@ class InviteMemberRequest(BaseModel):
 
 
 class UpdateMemberRoleRequest(BaseModel):
-    role: Literal["owner", "editor", "viewer"]
+    # Ownership is represented by KnowledgeBase.owner_id and is intentionally
+    # not assignable through the member endpoint. Transfer ownership needs a
+    # dedicated, auditable operation instead of silently creating two owners.
+    role: Literal["editor", "viewer"]
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────

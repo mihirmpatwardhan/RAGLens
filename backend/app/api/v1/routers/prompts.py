@@ -21,10 +21,13 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.deps import CurrentUser, DbSession
+from app.api.v1.deps import CurrentUser, DbSession, get_kb_role
 from app.core.config import get_settings
-from app.infrastructure.db.models.knowledge import PromptTemplate
+from app.infrastructure.db.models.knowledge import KnowledgeBase, PromptTemplate
+from app.infrastructure.db.models.rbac import KnowledgeBaseMember
+from app.infrastructure.db.models.user import User
 
 router = APIRouter(prefix="/prompts", tags=["Prompt Templates"])
 settings = get_settings()
@@ -69,6 +72,7 @@ class PromptTemplateUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = None
     content: str | None = Field(None, min_length=1, max_length=32000)
+    knowledge_base_id: uuid.UUID | None = Field(None, description="Workspace scope; null for personal template")
     is_public: bool | None = None
     default_model: str | None = Field(None, max_length=100)
     default_temperature: float | None = Field(None, ge=0.0, le=2.0)
@@ -96,6 +100,40 @@ class PromptTemplateListResponse(BaseModel):
     total: int
 
 
+async def _accessible_kb_ids(current_user: User, db: AsyncSession) -> list[uuid.UUID]:
+    """Return workspaces the user owns or is a member of."""
+    result = await db.execute(
+        select(KnowledgeBase.id)
+        .outerjoin(
+            KnowledgeBaseMember,
+            KnowledgeBaseMember.knowledge_base_id == KnowledgeBase.id,
+        )
+        .where(
+            or_(
+                KnowledgeBase.owner_id == current_user.id,
+                KnowledgeBaseMember.user_id == current_user.id,
+            )
+        )
+        .distinct()
+    )
+    return list(result.scalars().all())
+
+
+async def _can_read_template(
+    template: PromptTemplate,
+    current_user: User,
+    db: AsyncSession,
+) -> bool:
+    """Apply template visibility without leaking private workspace prompts."""
+    if template.owner_id == current_user.id:
+        return True
+    if not template.is_public:
+        return False
+    if template.knowledge_base_id is None:
+        return True
+    return await get_kb_role(template.knowledge_base_id, current_user, db) is not None
+
+
 # ──────────────────────────────────────────────
 # Create
 # ──────────────────────────────────────────────
@@ -116,6 +154,14 @@ async def create_prompt_template(
     Variable placeholders use ``{{variable_name}}`` syntax. The ``variables``
     field in the response is auto-extracted from the content.
     """
+    if payload.knowledge_base_id:
+        role = await get_kb_role(payload.knowledge_base_id, current_user, db)
+        if role not in {"owner", "editor"}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You need editor access to attach a template to this workspace.",
+            )
+
     variables = _extract_variables(payload.content)
 
     template = PromptTemplate(
@@ -152,13 +198,21 @@ async def list_prompt_templates(
     kb_id: uuid.UUID | None = Query(None, description="Filter by knowledge base"),
     include_public: bool = Query(True, description="Include public templates from other users"),
 ) -> PromptTemplateListResponse:
-    """List the current user's prompt templates, optionally including public ones."""
+    """List owned templates and shared templates from accessible workspaces."""
     from sqlalchemy import func
 
-    where = or_(
-        PromptTemplate.owner_id == current_user.id,
-        PromptTemplate.is_public == True if include_public else False,  # noqa: E712
-    )
+    if include_public:
+        accessible_kb_ids = await _accessible_kb_ids(current_user, db)
+        shared_scope = or_(
+            PromptTemplate.knowledge_base_id.is_(None),
+            PromptTemplate.knowledge_base_id.in_(accessible_kb_ids),
+        )
+        where = or_(
+            PromptTemplate.owner_id == current_user.id,
+            (PromptTemplate.is_public == True) & shared_scope,  # noqa: E712
+        )
+    else:
+        where = PromptTemplate.owner_id == current_user.id
 
     stmt = select(PromptTemplate).where(where)
 
@@ -201,7 +255,7 @@ async def get_prompt_template(
     if template is None:
         raise HTTPException(status_code=404, detail="Prompt template not found")
 
-    if template.owner_id != current_user.id and not template.is_public:
+    if not await _can_read_template(template, current_user, db):
         raise HTTPException(status_code=403, detail="Access denied to this prompt template")
 
     return PromptTemplateResponse.model_validate(template)
@@ -233,6 +287,16 @@ async def update_prompt_template(
 
     if template.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Only the owner can modify this template")
+
+    if "knowledge_base_id" in payload.model_fields_set:
+        if payload.knowledge_base_id:
+            role = await get_kb_role(payload.knowledge_base_id, current_user, db)
+            if role not in {"owner", "editor"}:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You need editor access to attach a template to this workspace.",
+                )
+        template.knowledge_base_id = payload.knowledge_base_id
 
     if payload.name is not None:
         template.name = payload.name

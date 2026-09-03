@@ -13,9 +13,12 @@ interface ThemeState {
 
   // Sidebar
   sidebarOpen: boolean;
+  mobileSidebarOpen: boolean;
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
+  setMobileSidebarOpen: (open: boolean) => void;
+  toggleMobileSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
 
   // Command Palette
@@ -44,10 +47,14 @@ export const useThemeStore = create<ThemeState>()(
 
       // Sidebar defaults
       sidebarOpen: true,
+      mobileSidebarOpen: false,
       sidebarCollapsed: false,
       toggleSidebar: () =>
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarOpen: (open) => set({ sidebarOpen: open }),
+      setMobileSidebarOpen: (open) => set({ mobileSidebarOpen: open }),
+      toggleMobileSidebar: () =>
+        set((state) => ({ mobileSidebarOpen: !state.mobileSidebarOpen })),
       setSidebarCollapsed: (collapsed) =>
         set({ sidebarCollapsed: collapsed }),
 
