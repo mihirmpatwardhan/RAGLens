@@ -74,8 +74,10 @@ secrets/
 chroma_data/
 qdrant_data/
 faiss_index/
-storage/
+/storage/
+backend/storage/
 uploads/
+!backend/app/infrastructure/storage/
 
 # ──────────────────────────────────────────────
 # Logs
