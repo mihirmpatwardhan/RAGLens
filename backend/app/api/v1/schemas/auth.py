@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class UserResponse(BaseModel):
@@ -27,8 +27,17 @@ class UserRegister(BaseModel):
 
     email: str
     password: str
-    full_name: str
+    full_name: str | None = None
+    name: str | None = None
     organization: str | None = None
+
+    @model_validator(mode="after")
+    def resolve_name(self) -> "UserRegister":
+        if not self.full_name and self.name:
+            self.full_name = self.name
+        elif not self.full_name:
+            self.full_name = self.email.split("@")[0]
+        return self
 
 
 class UserLogin(BaseModel):

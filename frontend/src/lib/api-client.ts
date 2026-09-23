@@ -91,14 +91,83 @@ export function getStreamingApiUrl(path: string): string {
   return `${API_BASE_URL}/api/v1${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+function formatValidationErrors(errors: unknown[]): string {
+  return errors
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object") {
+        const errObj = item as { loc?: unknown[]; msg?: string; message?: string };
+        const rawField = Array.isArray(errObj.loc)
+          ? errObj.loc.filter((l) => l !== "body").join(" ")
+          : "";
+        const field = rawField ? rawField.charAt(0).toUpperCase() + rawField.slice(1) : "";
+        const msg = errObj.msg || errObj.message || JSON.stringify(item);
+        return field ? `${field}: ${msg}` : msg;
+      }
+      return String(item);
+    })
+    .filter(Boolean)
+    .join("; ");
+}
+
 export function getErrorMessage(error: unknown): string {
   if (error instanceof AxiosError) {
     if (error.code === "ECONNABORTED" || error.message.includes("timeout")) {
       return "Request timed out. The server is taking too long to respond — please try again.";
     }
+
     const data = error.response?.data;
-    if (data?.error?.message) return data.error.message;
-    if (data?.detail) return typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+
+    // 1. Data is directly an array of validation errors
+    if (Array.isArray(data)) {
+      return formatValidationErrors(data);
+    }
+
+    // 2. Structured error object: { error: { message: ... } }
+    if (data?.error?.message && typeof data.error.message === "string") {
+      return data.error.message;
+    }
+
+    // 3. FastAPI detail field
+    if (data?.detail) {
+      if (Array.isArray(data.detail)) {
+        return formatValidationErrors(data.detail);
+      }
+      if (typeof data.detail === "string") {
+        try {
+          const parsed = JSON.parse(data.detail);
+          if (Array.isArray(parsed)) {
+            return formatValidationErrors(parsed);
+          }
+          if (parsed && typeof parsed === "object" && parsed.message) {
+            return String(parsed.message);
+          }
+        } catch {
+          // Plain string detail
+        }
+        return data.detail;
+      }
+      if (typeof data.detail === "object") {
+        return JSON.stringify(data.detail);
+      }
+      return String(data.detail);
+    }
+
+    // 4. Data itself is a JSON string representation of errors
+    if (typeof data === "string") {
+      try {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) {
+          return formatValidationErrors(parsed);
+        }
+      } catch {
+        return data;
+      }
+    }
+
+    if (data?.message && typeof data.message === "string") {
+      return data.message;
+    }
     if (error.message) return error.message;
   }
   if (error instanceof Error) return error.message;

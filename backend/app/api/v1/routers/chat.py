@@ -27,8 +27,7 @@ from app.api.v1.schemas.knowledge import (
 from app.application.retrieval.pipeline import (
     RetrievalPipeline,
     _RAG_SYSTEM_PROMPT_STRICT,
-    _RAG_SYSTEM_PROMPT_ENHANCED,
-    _RAG_USER_TEMPLATE,
+    _RAG_SYSTEM_PROMPT_NORMAL,
 )
 from app.core.config import get_settings
 from app.infrastructure.db.models.knowledge import Conversation, Message
@@ -53,7 +52,7 @@ async def create_conversation(
         role = await get_kb_role(request.knowledge_base_id, current_user, db)
         if role is None:
             raise HTTPException(status_code=403, detail="Not authorized to access this knowledge base")
-            
+
     conv = Conversation(
         user_id=current_user.id,
         title=request.title,
@@ -84,7 +83,7 @@ async def list_conversations(
     )
     if kb_id:
         stmt = stmt.where(Conversation.knowledge_base_id == kb_id)
-        
+
     result = await db.execute(stmt.order_by(Conversation.updated_at.desc()))
     convs = result.scalars().all()
     return [ConversationResponse.model_validate(c) for c in convs]
@@ -93,24 +92,24 @@ async def list_conversations(
 async def list_conversations_grouped(current_user: CurrentUser, db: DbSession):
     """Returns conversations grouped by Knowledge Base ID for hierarchical sidebar rendering."""
     from app.infrastructure.db.models.knowledge import KnowledgeBase
-    
+
     stmt = select(Conversation).where(
         Conversation.user_id == current_user.id,
         Conversation.is_archived == False,
     ).order_by(Conversation.updated_at.desc())
     convs_result = await db.execute(stmt)
     convs = convs_result.scalars().all()
-    
+
     kb_ids = [c.knowledge_base_id for c in convs if c.knowledge_base_id]
     kbs = {}
     if kb_ids:
         kb_stmt = select(KnowledgeBase).where(KnowledgeBase.id.in_(kb_ids))
         kbs_result = await db.execute(kb_stmt)
         kbs = {kb.id: kb for kb in kbs_result.scalars().all()}
-        
+
     workspaces_map = {}
     global_convs = []
-    
+
     for c in convs:
         c_resp = ConversationResponse.model_validate(c).model_dump(mode="json")
         if c.knowledge_base_id:
@@ -127,7 +126,7 @@ async def list_conversations_grouped(current_user: CurrentUser, db: DbSession):
             workspaces_map[kb_id_str]["conversations"].append(c_resp)
         else:
             global_convs.append(c_resp)
-            
+
     return {
         "workspaces": list(workspaces_map.values()),
         "global": global_convs
@@ -228,9 +227,9 @@ async def send_message(
         last_keepalive = time.time()
 
         status_message = (
-            "Searching your workspace and checking claims against web sources..."
-            if request.answer_mode == "enhanced"
-            else "Searching your workspace..."
+            "Searching your workspace..."
+            if request.answer_mode == "strict"
+            else "Thinking..."
         )
         yield f"event: status\ndata: {json.dumps({'message': status_message})}\n\n"
         try:
@@ -280,9 +279,9 @@ async def send_message(
 
             # Select correct system prompt based on mode
             active_system_prompt = (
-                _RAG_SYSTEM_PROMPT_ENHANCED
-                if request.answer_mode == "enhanced"
-                else _RAG_SYSTEM_PROMPT_STRICT
+                _RAG_SYSTEM_PROMPT_STRICT
+                if request.answer_mode == "strict"
+                else _RAG_SYSTEM_PROMPT_NORMAL
             )
 
             # Build full multi-turn messages for the LLM:

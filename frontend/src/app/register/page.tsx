@@ -35,6 +35,7 @@ export default function RegisterPage() {
         email,
         password,
         full_name: fullName,
+        name: fullName,
         organization: organization || null,
       });
 

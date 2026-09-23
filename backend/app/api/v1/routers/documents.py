@@ -141,14 +141,14 @@ async def upload_document(
 
     from fastapi.concurrency import run_in_threadpool
     save_result = await run_in_threadpool(_save_chunked)
-    
+
     if save_result is None:
         storage_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File exceeds {MAX_FILE_SIZE_BYTES // (1024*1024)}MB limit",
         )
-        
+
     content_hash, file_size = save_result
 
     if file_size == 0:
@@ -640,7 +640,7 @@ async def get_document(
 
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-        
+
     role = await get_kb_role(doc.knowledge_base_id, current_user, db)
     if role is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -670,7 +670,7 @@ async def delete_document(
 
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-        
+
     role = await get_kb_role(doc.knowledge_base_id, current_user, db)
     if role not in ["owner", "editor"]:
         raise HTTPException(status_code=403, detail="Not authorized to delete documents in this knowledge base")
@@ -699,7 +699,7 @@ async def delete_document(
     try:
         from app.infrastructure.vector_stores import get_vector_store
         vector_store = get_vector_store()
-        
+
         # Use dimension suffix if available on KB, otherwise fallback to standard
         collection_name = f"kb_{doc.knowledge_base_id}_dim{kb.vector_dimension}" if kb and kb.vector_dimension else f"kb_{doc.knowledge_base_id}"
 
@@ -744,10 +744,10 @@ async def get_pipeline_status(
         )
     )
     doc = result.scalar_one_or_none()
-    
+
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-        
+
     role = await get_kb_role(doc.knowledge_base_id, current_user, db)
     if role is None:
         raise HTTPException(status_code=404, detail="Document not found")

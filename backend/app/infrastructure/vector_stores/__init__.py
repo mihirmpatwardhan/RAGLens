@@ -25,8 +25,8 @@ def get_vector_store() -> VectorStoreAdapter:
 
 
 __all__ = [
-    "VectorStoreAdapter",
     "ChromaVectorStoreAdapter",
     "QdrantVectorStoreAdapter",
+    "VectorStoreAdapter",
     "get_vector_store",
 ]

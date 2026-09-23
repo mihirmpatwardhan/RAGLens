@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -231,14 +232,12 @@ class CreateConversationRequest(BaseModel):
     system_prompt: str | None = None
 
 
-from typing import Literal
-
 class SendMessageRequest(BaseModel):
     """Send a message in a conversation."""
 
     content: str = Field(..., min_length=1)
     knowledge_base_id: uuid.UUID | None = None
-    answer_mode: Literal["strict", "enhanced"] = "strict"
+    answer_mode: Literal["strict", "normal"] = "strict"
 
 
 class ConversationResponse(BaseModel):

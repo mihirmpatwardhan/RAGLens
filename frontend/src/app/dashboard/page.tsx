@@ -10,10 +10,11 @@ import {
   ExternalLink,
   FileCheck2,
   FileUp,
-  Globe2,
+  Globe,
   Loader2,
   MessageSquareText,
   Send,
+  Sparkles,
   Zap,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -35,7 +36,7 @@ type ChatMessage = {
   streamingStatus?: boolean;
 };
 
-type AnswerMode = "strict" | "enhanced";
+type AnswerMode = "strict" | "normal";
 
 function imagePathsFromCitations(citations: unknown): string[] {
   if (!Array.isArray(citations)) return [];
@@ -467,7 +468,7 @@ function ChatPageInner() {
                       {message.role === "assistant" && message.trace?.web_sources?.length ? (
                         <div className="mt-4 border-t border-[var(--color-border)] pt-3">
                           <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-[var(--color-text-secondary)]">
-                            <Globe2 className="h-3.5 w-3.5 text-[var(--color-info)]" />
+                            <Globe className="h-3.5 w-3.5 text-[var(--color-info)]" />
                             Web sources used for fact-checking
                           </div>
                           <div className="space-y-1.5">
@@ -560,23 +561,23 @@ function ChatPageInner() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAnswerMode("enhanced")}
+                  onClick={() => setAnswerMode("normal")}
                   disabled={isStreaming}
-                  aria-pressed={answerMode === "enhanced"}
+                  aria-pressed={answerMode === "normal"}
                   className={cn(
                     "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 font-semibold transition",
-                    answerMode === "enhanced"
-                      ? "border-[var(--color-info)]/40 bg-[var(--color-info)]/10 text-[var(--color-info)]"
+                    answerMode === "normal"
+                      ? "border-purple-500/20 bg-purple-500/10 text-purple-400"
                       : "border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-surface-100)]"
                   )}
                 >
-                  <Globe2 className="h-3.5 w-3.5" />
-                  Fact-check &amp; correct
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Global AI
                 </button>
                 <span className="hidden text-[var(--color-text-muted)] sm:inline">
                   {answerMode === "strict"
                     ? "Use only the selected document"
-                    : "Compare claims with live web sources"}
+                    : "Free-form AI — draws on its own global knowledge"}
                 </span>
               </div>
               <div className="flex items-center gap-2 text-[var(--color-text-secondary)]">

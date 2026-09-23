@@ -9,7 +9,7 @@ Endpoints:
   POST /playground/compare — NOT_IMPLEMENTED (placeholder for future multi-model compare)
 """
 
-from typing import Literal
+from typing import Literal  # used via schema
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
@@ -113,7 +113,7 @@ async def generate_quiz_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Quiz generation failed: {exc}",
-        )
+        ) from exc
 
     return QuizGenerateResponse(
         quiz_items=[
@@ -233,7 +233,7 @@ async def run_prompt(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"LLM provider error: {exc}",
-        )
+        ) from exc
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
     # Rough token count (word-split approximation when real counts are unavailable)

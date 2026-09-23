@@ -6,7 +6,8 @@ Custom exceptions and global exception handlers for consistent API error respons
 
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import ORJSONResponse
 
 # ──────────────────────────────────────────────
@@ -113,6 +114,40 @@ class PipelineError(RAGLenseError):
 def register_exception_handlers(app: FastAPI) -> None:
     """Register global exception handlers for the FastAPI app."""
 
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        errors = exc.errors()
+        messages = []
+        for err in errors:
+            field = " ".join(str(loc) for loc in err.get("loc", []) if loc != "body").replace("_", " ")
+            msg = err.get("msg", "Invalid value")
+            messages.append(f"{field.capitalize()}: {msg}" if field else msg)
+        clean_message = "; ".join(messages) if messages else "Invalid request data"
+        return ORJSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": clean_message,
+                },
+                "detail": clean_message,
+            },
+        )
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return ORJSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "code": "HTTP_ERROR",
+                    "message": detail,
+                },
+                "detail": detail,
+            },
+        )
+
     @app.exception_handler(RAGLenseError)
     async def raglense_exception_handler(request: Request, exc: RAGLenseError):
         return ORJSONResponse(
@@ -122,7 +157,8 @@ def register_exception_handlers(app: FastAPI) -> None:
                     "code": exc.error_code,
                     "message": exc.message,
                     "details": exc.details,
-                }
+                },
+                "detail": exc.message,
             },
         )
 
@@ -137,6 +173,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                     "code": "INTERNAL_ERROR",
                     "message": "An unexpected internal error occurred",
                     "details": {"type": type(exc).__name__, "msg": str(exc)},
-                }
+                },
+                "detail": "An unexpected internal error occurred",
             },
         )

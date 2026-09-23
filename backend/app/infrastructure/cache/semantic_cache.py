@@ -31,7 +31,7 @@ class SemanticCache:
                 query_embedding=query_vector,
                 top_k=1,
             )
-            
+
             if matches and len(matches) > 0:
                 best_match = matches[0]
                 # High score indicates high semantic match

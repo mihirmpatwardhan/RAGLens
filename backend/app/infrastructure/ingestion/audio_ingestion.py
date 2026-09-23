@@ -64,11 +64,11 @@ def _load_whisper_model(model_size: str = "base"):
         _whisper_model_size = model_size
         logger.info("faster-whisper model '%s' loaded.", model_size)
         return _whisper_model
-    except ImportError:
+    except ImportError as err:
         raise ImportError(
             "faster-whisper is not installed. "
             "Install it with: pip install faster-whisper"
-        )
+        ) from err
 
 
 def _sync_transcribe(file_path: Path, model_size: str = "base") -> list[TranscriptSegment]:

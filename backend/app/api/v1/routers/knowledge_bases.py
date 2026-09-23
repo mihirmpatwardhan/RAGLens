@@ -158,7 +158,7 @@ async def update_knowledge_base(
         )
 
     update_data = request.model_dump(exclude_unset=True)
-    if "settings" in update_data and update_data["settings"]:
+    if update_data.get("settings"):
         update_data["settings"] = update_data["settings"].model_dump() if hasattr(update_data["settings"], "model_dump") else update_data["settings"]
 
     for field, value in update_data.items():
@@ -200,18 +200,18 @@ async def delete_knowledge_base(
     import logging
     logger = logging.getLogger(__name__)
     vector_store = get_vector_store()
-    
+
     # Try deleting the dimension-specific collection
     if kb.vector_dimension:
         try:
             await vector_store.delete_collection(f"kb_{kb_id}_dim{kb.vector_dimension}")
         except Exception as e:
             logger.warning(f"Failed to delete vector collection kb_{kb_id}_dim{kb.vector_dimension}: {e}")
-            
+
     # Also try legacy dimension-less collection
     try:
         await vector_store.delete_collection(f"kb_{kb_id}")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Legacy collection kb_%s not found or already deleted: %s", kb_id, e)
 
     await db.delete(kb)

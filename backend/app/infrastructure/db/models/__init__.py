@@ -13,14 +13,14 @@ from app.infrastructure.db.models.rbac import KnowledgeBaseMember
 from app.infrastructure.db.models.user import User
 
 __all__ = [
-    "User",
-    "KnowledgeBase",
-    "Document",
-    "Chunk",
-    "PipelineRun",
-    "Conversation",
-    "Message",
-    "KnowledgeBaseMember",
-    "PromptTemplate",
     "AgentRun",
+    "Chunk",
+    "Conversation",
+    "Document",
+    "KnowledgeBase",
+    "KnowledgeBaseMember",
+    "Message",
+    "PipelineRun",
+    "PromptTemplate",
+    "User",
 ]

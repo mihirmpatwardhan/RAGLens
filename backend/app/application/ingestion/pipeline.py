@@ -713,7 +713,7 @@ class IngestionPipeline:
                 id=chunk_id,
                 document_id=self.document_id,
                 content=chunk["text"],
-                content_hash=hashlib.md5(chunk["text"].encode()).hexdigest(),
+                content_hash=hashlib.sha256(chunk["text"].encode()).hexdigest(),
                 chunk_index=chunk.get("index", idx),
                 page_number=chunk.get("page_number", 1),
                 section_title=chunk.get("section_title"),

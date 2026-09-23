@@ -36,6 +36,15 @@ settings = get_settings()
 
 def _setup_logging() -> None:
     """Configure structured logging based on settings."""
+    if sys.platform == "win32":
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            if hasattr(sys.stderr, "reconfigure"):
+                sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
 
     # Configure root logger
@@ -94,8 +103,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             _load_local_model(get_settings().LOCAL_EMBEDDING_MODEL)
             logger.info("  Embeddings:  [OK] Local model pre-warmed")
         except Exception as e:
-            logger.warning(f"  Embeddings:  [WARN] Failed to pre-warm local model: {e}")
-            
+            logger.warning("  Embeddings:  [WARN] Failed to pre-warm local model: %s", e)
+
     import threading
     threading.Thread(target=_warm_embedding, daemon=True).start()
 

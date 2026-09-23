@@ -1,0 +1,59 @@
+services:
+  # ──────────────────────────────────────────────
+  # 1. FastAPI Backend Service (Free Tier)
+  # ──────────────────────────────────────────────
+  - type: web
+    name: raglens-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: development
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:///./raglense.db
+      - key: VECTOR_DB_PROVIDER
+        value: chroma
+      - key: CHROMA_PERSIST_DIR
+        value: ./chroma_data
+      - key: DEFAULT_EMBEDDING_PROVIDER
+        value: local
+      - key: CORS_ORIGINS
+        value: '["*"]'
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+  # ──────────────────────────────────────────────
+  # 2. Next.js Frontend Service (Free Tier)
+  # ──────────────────────────────────────────────
+  - type: web
+    name: raglens-frontend
+    runtime: node
+    rootDir: frontend
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: BACKEND_ORIGIN
+        fromService:
+          type: web
+          name: raglens-backend
+          property: host
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: raglens-backend
+          property: host

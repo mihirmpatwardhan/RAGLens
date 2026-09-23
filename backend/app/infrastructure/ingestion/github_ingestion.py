@@ -64,8 +64,8 @@ def _clone_or_pull(repo_url: str, clone_dir: Path) -> Path:
     """Clone the repo if not present, or pull latest changes. Blocking."""
     try:
         import git  # type: ignore[import-untyped]
-    except ImportError:
-        raise ImportError("gitpython is not installed. Run: pip install gitpython")
+    except ImportError as err:
+        raise ImportError("gitpython is not installed. Run: pip install gitpython") from err
 
     repo_name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
     target = clone_dir / repo_name

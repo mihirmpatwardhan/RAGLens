@@ -4,6 +4,7 @@ RAGLense - API Dependencies
 Dependency injection for authentication, database sessions, and services.
 """
 
+import secrets
 import uuid
 from typing import Annotated
 
@@ -76,7 +77,9 @@ async def get_current_user(
             user = User(
                 id=user_id,
                 email=email or f"clerk_{user_id.hex[:8]}@clerk.user",
-                hashed_password="clerk_managed_password",
+                # Never a real password — Clerk owns auth; this field must be non-null
+                # so we fill it with a cryptographically random value that nobody knows.
+                hashed_password=secrets.token_hex(32),
                 full_name="Clerk User",
                 is_active=True,
                 is_verified=True,
